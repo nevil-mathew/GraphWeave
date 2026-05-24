@@ -84,12 +84,20 @@ llm = [
     "openai>=1.0.0",
     "google-genai>=1.0.0",
 ]
+# Adaptive kNN backend.  When installed, GraphBuilder uses hnswlib HNSW for
+# corpora at/above ``hnsw_small_threshold`` (default 5,000 docs) instead of
+# the exact sklearn NearestNeighbors path.  Output shape and downstream
+# graph construction are identical regardless of which backend ran.
+fast-knn = [
+    "hnswlib>=0.7.0",
+]
 full = [
     "anthropic>=0.18.0",
     "openai>=1.0.0",
     "google-genai>=1.0.0",
     "pacmap>=0.6.0",
     "datamapplot>=0.1.0",
+    "hnswlib>=0.7.0",
 ]
 dev = [
     "pytest>=7.0.0",

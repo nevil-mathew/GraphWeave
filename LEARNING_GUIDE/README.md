@@ -128,6 +128,22 @@ d) Check Convergence
    └─ Stop if converged
 ```
 
+**Adaptive kNN backend.** Step (a) does a kNN search over document
+embeddings to seed the similarity graph. As of 2.3.0, `knn_backend="auto"`
+(default) switches strategies by corpus size:
+
+- **< 5,000 docs** → exact sklearn `NearestNeighbors` (no change vs. earlier
+  versions; results are byte-for-byte reproducible).
+- **5,000 – 49,999 docs** → hnswlib HNSW with `M=16`, `ef=200`.
+- **≥ 50,000 docs** → hnswlib HNSW with `M=32`, `ef=400`.
+
+The dispatch is invisible to the rest of the pipeline — mutual-kNN
+filtering, SNN counting and multi-view fusion get the same `(neighbor_id,
+similarity)` shape regardless of which backend ran. Install hnswlib via
+`pip install tritopic[fast-knn]`; if it isn't available the adaptive path
+silently falls back to exact at every size. Force the exact path with
+`knn_backend="exact"` for reproducibility benchmarks.
+
 ### Step 4: Label Generation (2-3 GB temporary)
 ```
 Clusters → LLM → Human-readable labels

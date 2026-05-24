@@ -76,6 +76,10 @@ Legacy consensus_method="hierarchical":
 | **Diverse LLM context** | labeling_sample_strategy | `labeling_sample_strategy="mmr"` (avoids near-paraphrase docs) |
 | **Edge-aware LLM context** | labeling_sample_strategy | `labeling_sample_strategy="stratified"` (60/30/10 close/mid/far) |
 | **MMR relevance/diversity** | mmr_lambda | `mmr_lambda=0.7` (more relevance) / `0.3` (more diversity) |
+| **Adaptive kNN (default)** | knn_backend | `knn_backend="auto"` — exact under 5k, hnswlib HNSW above (needs `pip install tritopic[fast-knn]`) |
+| **Exact kNN (reproducible)** | knn_backend | `knn_backend="exact"` (sklearn NearestNeighbors at every size) |
+| **Force HNSW** | knn_backend | `knn_backend="hnsw"` (always hnswlib; requires `fast-knn` extra) |
+| **HNSW size thresholds** | hnsw_small_threshold / hnsw_large_threshold | defaults `5_000` / `50_000` — below = exact, between = `M=16, ef=200`, at/above = `M=32, ef=400` |
 
 ---
 

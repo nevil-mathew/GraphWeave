@@ -45,6 +45,11 @@ class GraphBuilder:
         snn_weight: float = 0.5,
         language: str = "english",
         n_jobs: int = -1,
+        knn_backend: Literal["auto", "exact", "hnsw"] = "auto",
+        hnsw_small_threshold: int = 5_000,
+        hnsw_large_threshold: int = 50_000,
+        random_state: int = 42,
+        verbose: bool = False,
     ):
         from tritopic.utils.stopwords import get_stopwords
 
@@ -54,6 +59,11 @@ class GraphBuilder:
         self.snn_weight = snn_weight
         self.language = language
         self.n_jobs = n_jobs
+        self.knn_backend = knn_backend
+        self.hnsw_small_threshold = hnsw_small_threshold
+        self.hnsw_large_threshold = hnsw_large_threshold
+        self.random_state = random_state
+        self.verbose = verbose
 
         self._tfidf_vectorizer = TfidfVectorizer(
             max_features=10000,
@@ -64,6 +74,27 @@ class GraphBuilder:
             sublinear_tf=True,  # log(1+tf) dampens common term dominance
         )
     
+    def _select_knn_backend(self, n_samples: int) -> Literal["exact", "hnsw_small", "hnsw_large"]:
+        """Pick exact (<5k), HNSW-small (5k–50k), or HNSW-large (≥50k).
+
+        Falls back to exact when ``knn_backend='exact'`` is forced, the metric
+        isn't cosine, or hnswlib isn't importable.
+        """
+        if self.knn_backend == "exact":
+            return "exact"
+        if self.metric != "cosine":
+            return "exact"
+        try:
+            import hnswlib  # noqa: F401
+        except ImportError:
+            return "exact"
+
+        if n_samples < self.hnsw_small_threshold:
+            return "exact"
+        if n_samples < self.hnsw_large_threshold:
+            return "hnsw_small"
+        return "hnsw_large"
+
     def _compute_knn(
         self,
         embeddings: np.ndarray,
@@ -71,9 +102,27 @@ class GraphBuilder:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Compute kNN and return (distances, indices, similarities).
 
-        Shared helper so hybrid graphs avoid duplicate kNN computation.
+        Adaptive dispatcher: exact sklearn for small corpora, hnswlib HNSW for
+        mid/large. Output shape/dtype/self-at-col-0 contract is identical
+        across backends so downstream graph construction is backend-agnostic.
         """
         k = n_neighbors or self.n_neighbors
+        n_samples = embeddings.shape[0]
+
+        backend = self._select_knn_backend(n_samples)
+        if self.verbose:
+            print(f"      kNN backend: {backend} (n_samples={n_samples}, k={k})")
+
+        if backend == "exact":
+            return self._compute_knn_exact(embeddings, k)
+        return self._compute_knn_hnsw(embeddings, k, backend)
+
+    def _compute_knn_exact(
+        self,
+        embeddings: np.ndarray,
+        k: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Exact kNN via sklearn (unchanged from the pre-adaptive path)."""
         n_samples = embeddings.shape[0]
 
         nn = NearestNeighbors(
@@ -90,6 +139,66 @@ class GraphBuilder:
         else:
             similarities = 1 / (1 + distances)
 
+        return distances, indices, similarities
+
+    def _compute_knn_hnsw(
+        self,
+        embeddings: np.ndarray,
+        k: int,
+        backend: str,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Approximate kNN via hnswlib (cosine space).
+
+        Builds a fresh index each call — embeddings change across refinement
+        iterations, so caching across iterations would be wrong.
+        """
+        import hnswlib
+
+        n_samples, dim = embeddings.shape
+        k_query = min(k + 1, n_samples)
+
+        if backend == "hnsw_large":
+            M, ef_construction, ef_search = 32, 400, 400
+        else:
+            M, ef_construction, ef_search = 16, 200, 200
+
+        data = np.ascontiguousarray(embeddings, dtype=np.float32)
+
+        index = hnswlib.Index(space="cosine", dim=dim)
+        index.init_index(
+            max_elements=n_samples,
+            ef_construction=ef_construction,
+            M=M,
+            random_seed=self.random_state,
+        )
+        num_threads = self.n_jobs if self.n_jobs and self.n_jobs > 0 else 0
+        index.set_num_threads(num_threads)
+        index.add_items(data, np.arange(n_samples))
+        index.set_ef(max(ef_search, k_query))
+
+        labels, distances = index.knn_query(data, k=k_query)
+        indices = labels.astype(np.int64, copy=False)
+        distances = distances.astype(np.float64, copy=False)
+
+        # hnswlib does not guarantee self is at column 0. Force it: for any
+        # row where indices[i, 0] != i, swap whichever column holds i into
+        # position 0. If i isn't present (very rare with duplicate vectors),
+        # overwrite column 0 with (i, 0.0) and let the existing self-drop
+        # slicing handle it.
+        first_col = indices[:, 0]
+        wrong_rows = np.where(first_col != np.arange(n_samples))[0]
+        for i in wrong_rows:
+            row = indices[i]
+            match = np.where(row == i)[0]
+            if match.size > 0:
+                j = match[0]
+                indices[i, 0], indices[i, j] = indices[i, j], indices[i, 0]
+                distances[i, 0], distances[i, j] = distances[i, j], distances[i, 0]
+            else:
+                indices[i, 0] = i
+                distances[i, 0] = 0.0
+
+        similarities = 1.0 - distances
         return distances, indices, similarities
 
     def build_knn_graph(
@@ -201,20 +310,12 @@ class GraphBuilder:
         adjacency : csr_matrix
             Sparse adjacency matrix with SNN weights.
         """
-        k = n_neighbors or self.n_neighbors
         n_samples = embeddings.shape[0]
 
         if _precomputed_indices is not None:
             indices = _precomputed_indices
         else:
-            nn = NearestNeighbors(
-                n_neighbors=min(k + 1, n_samples),
-                metric=self.metric,
-                algorithm="auto",
-                n_jobs=self.n_jobs,
-            )
-            nn.fit(embeddings)
-            _, indices = nn.kneighbors(embeddings)
+            _, indices, _ = self._compute_knn(embeddings, n_neighbors)
 
         # Vectorized SNN: build binary membership matrix M (n_samples × n_samples)
         # where M[i, j] = 1 iff j is a kNN of i (excluding self at col 0).

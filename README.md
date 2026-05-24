@@ -22,6 +22,7 @@ A state-of-the-art topic modeling library that fuses semantic embeddings, lexica
 - [The Pipeline](#the-pipeline)
 - [Configuration Reference](#configuration-reference)
 - [Memory Optimization for Large Datasets](#memory-optimization-for-large-datasets)
+- [Adaptive kNN Backend](#adaptive-knn-backend)
 - [Troubleshooting](#troubleshooting)
 - [Dimensionality Reduction](#dimensionality-reduction)
 - [Soft Topic Assignments](#soft-topic-assignments)
@@ -284,6 +285,9 @@ config = TriTopicConfig(
     metric="cosine",                       # distance metric
     graph_type="hybrid",                   # "knn", "mutual_knn", "snn", "hybrid"
     snn_weight=0.5,                        # SNN weight in hybrid mode
+    knn_backend="auto",                    # "auto" | "exact" | "hnsw" — see "Adaptive kNN Backend"
+    hnsw_small_threshold=5_000,            # below this, "auto" stays on exact sklearn
+    hnsw_large_threshold=50_000,           # at/above this, HNSW uses (M=32, ef=400)
 
     # --- Multi-View Fusion ---
     use_lexical_view=True,                 # include TF-IDF view
@@ -443,6 +447,66 @@ config = TriTopicConfig(
 ```
 
 Combined, these typically give an additional 2-3× headroom with under 2% quality loss.
+
+---
+
+## Adaptive kNN Backend
+
+The semantic graph that drives Leiden clustering relies on a kNN search over
+document embeddings. For corpora above a few thousand documents the exact
+`O(n²)` search becomes the dominant fit cost — and it runs once per
+refinement iteration. TriTopic 2.3.0 ships an **adaptive backend** that
+chooses between exact and approximate (HNSW) search based on corpus size:
+
+| Corpus size       | Backend              | HNSW params           |
+|-------------------|----------------------|------------------------|
+| < 5,000 docs      | exact (sklearn)      | —                      |
+| 5,000 – 49,999    | hnswlib HNSW         | `M=16`, `ef=200`       |
+| ≥ 50,000          | hnswlib HNSW         | `M=32`, `ef=400`       |
+
+The switch is invisible to everything downstream — mutual-kNN filtering, SNN
+computation and multi-view fusion receive identical `(neighbor_id, similarity)`
+output regardless of which backend ran.
+
+### Enabling the HNSW path
+
+HNSW is provided by the optional `fast-knn` extra:
+
+```bash
+pip install "tritopic[fast-knn]"
+```
+
+When the extra isn't installed, `knn_backend="auto"` silently falls back to
+the exact sklearn path at every size — no behavior change vs. earlier
+TriTopic releases.
+
+### Configuration
+
+```python
+config = TriTopicConfig(
+    knn_backend="auto",            # "auto" | "exact" | "hnsw"
+    hnsw_small_threshold=5_000,    # below this, "auto" stays on exact
+    hnsw_large_threshold=50_000,   # at/above this, HNSW switches to (M=32, ef=400)
+)
+```
+
+- `"auto"` (default): exact below `hnsw_small_threshold`, HNSW above.
+- `"exact"`: always use sklearn. Use this for reproducibility benchmarks or
+  to A/B against the approximate path.
+- `"hnsw"`: always use hnswlib (requires the `fast-knn` extra).
+
+With `verbose=True`, each kNN call logs which backend was selected and the
+corpus size — useful for confirming the dispatch picked the right branch
+on your data.
+
+### Notes
+
+- HNSW uses `space="cosine"`, matching the default `metric="cosine"`. If
+  you change `metric`, the adaptive backend falls back to exact.
+- The index is built fresh per call — refinement mutates embeddings each
+  iteration, so caching across iterations would be wrong.
+- `transform()` and `transform_proba()` use centroid similarity, not graph
+  kNN — incremental document additions never hit the HNSW index.
 
 ---
 

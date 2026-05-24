@@ -75,6 +75,16 @@ class TriTopicConfig:
     metric: str = "cosine"
     graph_type: Literal["mutual_knn", "snn", "hybrid"] = "hybrid"
     snn_weight: float = 0.5
+
+    # Adaptive kNN backend for semantic graph construction.
+    # - "auto" (default): exact below hnsw_small_threshold; hnswlib HNSW above.
+    # - "exact":  always sklearn NearestNeighbors (reproducibility / baseline).
+    # - "hnsw":   always hnswlib (requires `pip install tritopic[fast-knn]`).
+    # M / ef are derived from corpus size: (M=16, ef=200) up to
+    # hnsw_large_threshold, (M=32, ef=400) at/above it.
+    knn_backend: Literal["auto", "exact", "hnsw"] = "auto"
+    hnsw_small_threshold: int = 5_000
+    hnsw_large_threshold: int = 50_000
     
     # Multi-view settings
     use_lexical_view: bool = True
@@ -271,6 +281,11 @@ class TriTopic:
             snn_weight=self.config.snn_weight,
             language=self.config.language,
             n_jobs=self.config.n_jobs,
+            knn_backend=self.config.knn_backend,
+            hnsw_small_threshold=self.config.hnsw_small_threshold,
+            hnsw_large_threshold=self.config.hnsw_large_threshold,
+            random_state=self.config.random_state,
+            verbose=self.config.verbose,
         )
         self._clusterer = ConsensusLeiden(
             resolution=self.config.resolution,
