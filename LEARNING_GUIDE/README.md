@@ -134,6 +134,14 @@ Clusters → LLM → Human-readable labels
 "Topic 1: Business Development" (based on cluster contents)
 ```
 
+**Representative-doc sampling.** Before calling the LLM, TriTopic picks `n_representative_docs` per topic to send as context. The selection is controlled by `labeling_sample_strategy`:
+
+- `"centroid"` *(default)* — closest-to-centroid only. Best for tight, coherent topics.
+- `"mmr"` — Maximal Marginal Relevance. Picks docs that are close to the centroid **and** diverse from each other (tuned by `mmr_lambda`, default 0.5). Use when centroid-closest docs are near-paraphrases and you want broader coverage without absorbing outliers.
+- `"stratified"` — sorts members by distance-to-centroid, bins into close/mid/far, samples per `stratified_proportions` (default 60/30/10). Use when you want explicit control over how much "edge" of the topic the LLM sees.
+
+All three are deterministic. If `get_representative_docs(topic_id, n_docs=N)` is called with `N` larger than was precomputed, the sampling re-runs over the full topic in the configured style.
+
 ### Memory Timeline
 
 ```

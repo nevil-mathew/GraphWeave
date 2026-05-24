@@ -309,6 +309,11 @@ config = TriTopicConfig(
     n_representative_docs=5,               # representative docs per topic
     keyword_method="ctfidf",               # "ctfidf", "bm25", or "keybert"
 
+    # --- Representative-doc sampling (for LLM labelling) ---
+    labeling_sample_strategy="centroid",   # "centroid" | "mmr" | "stratified"
+    mmr_lambda=0.5,                        # MMR: 1.0=pure relevance, 0.0=pure diversity
+    stratified_proportions=(0.6, 0.3, 0.1),# stratified: (close, mid, far) bin weights
+
     # --- Outlier Handling ---
     outlier_threshold=0.1,                 # cosine similarity threshold for transform()
 
@@ -671,6 +676,18 @@ docs = model.get_representative_docs(0, n_docs=3)
 for idx, text in docs:
     print(f"  Doc {idx}: {text[:100]}...")
 ```
+
+### Representative document sampling
+
+The docs returned by `get_representative_docs()` are the ones sent to the LLM during `generate_labels()`. The selection algorithm is controlled by `labeling_sample_strategy`:
+
+| Strategy | What it does | When to use |
+|---|---|---|
+| `"centroid"` *(default)* | Closest-to-centroid only (L2 distance). | Tight, coherent topics. Backward-compatible. |
+| `"mmr"` | Maximal Marginal Relevance: greedily picks docs that are close to the centroid **and** diverse from each other. Tuned by `mmr_lambda` (default 0.5). | Topics where centroid-closest docs are near-paraphrases of each other — gives the LLM broader coverage without absorbing outliers. |
+| `"stratified"` | Sorts members by distance-to-centroid, splits into close/mid/far bins, samples proportionally per `stratified_proportions` (default 60/30/10). | When you want explicit control over how much "edge" of the topic the LLM sees. |
+
+All three strategies are deterministic. If `get_representative_docs(topic_id, n_docs=N)` is called with `N` larger than `n_representative_docs`, the sampling is re-run on demand over the full topic so the LLM gets exactly `N` docs in the selected style.
 
 ---
 

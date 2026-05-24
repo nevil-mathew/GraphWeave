@@ -73,6 +73,9 @@ Legacy consensus_method="hierarchical":
 | **Stricter agreement** | consensus_threshold_tau | `consensus_threshold_tau=0.7` (more conservative) |
 | **Looser agreement** | consensus_threshold_tau | `consensus_threshold_tau=0.3` (more edges retained) |
 | **Legacy linkage** | consensus_method | `consensus_method="hierarchical"` (small N only) |
+| **Diverse LLM context** | labeling_sample_strategy | `labeling_sample_strategy="mmr"` (avoids near-paraphrase docs) |
+| **Edge-aware LLM context** | labeling_sample_strategy | `labeling_sample_strategy="stratified"` (60/30/10 close/mid/far) |
+| **MMR relevance/diversity** | mmr_lambda | `mmr_lambda=0.7` (more relevance) / `0.3` (more diversity) |
 
 ---
 

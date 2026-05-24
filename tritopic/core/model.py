@@ -98,6 +98,14 @@ class TriTopicConfig:
     n_keywords: int = 10
     n_representative_docs: int = 5
     keyword_method: Literal["ctfidf", "bm25", "keybert"] = "ctfidf"
+
+    # Representative-doc sampling for LLM labelling
+    # - "centroid":  closest-to-centroid only (default; reproduces prior behavior)
+    # - "mmr":       Maximal Marginal Relevance — diverse picks near the centroid
+    # - "stratified": split topic members into close/mid/far bins and sample proportionally
+    labeling_sample_strategy: Literal["centroid", "mmr", "stratified"] = "centroid"
+    mmr_lambda: float = 0.5  # 1.0 = pure relevance, 0.0 = pure diversity
+    stratified_proportions: tuple[float, float, float] = (0.6, 0.3, 0.1)
     
     # Dimensionality reduction
     use_dim_reduction: bool = True
@@ -773,6 +781,92 @@ class TriTopic:
 
         self.probabilities_ = proba
 
+    def _select_representative_docs(
+        self,
+        topic_indices: np.ndarray,
+        topic_embeddings: np.ndarray,
+        centroid: np.ndarray,
+        n_docs: int,
+    ) -> list[int]:
+        """Select representative document indices for a topic.
+
+        Dispatches on ``self.config.labeling_sample_strategy``.  Returns
+        a list of ``int`` indices into the original document array.
+        """
+        n_available = len(topic_indices)
+        n = min(n_docs, n_available)
+        if n <= 0:
+            return []
+
+        strategy = self.config.labeling_sample_strategy
+
+        if strategy == "centroid":
+            distances = np.linalg.norm(topic_embeddings - centroid, axis=1)
+            order = np.argsort(distances)[:n]
+            return [int(topic_indices[i]) for i in order]
+
+        if strategy == "mmr":
+            # Cosine similarity; normalize defensively in case embeddings aren't unit-length.
+            emb_norm = np.linalg.norm(topic_embeddings, axis=1, keepdims=True)
+            emb = topic_embeddings / np.clip(emb_norm, 1e-12, None)
+            c_norm = np.linalg.norm(centroid)
+            c = centroid / max(c_norm, 1e-12)
+            relevance = emb @ c  # (n_available,)
+            lam = float(self.config.mmr_lambda)
+
+            selected: list[int] = []
+            max_sim_to_selected = np.full(n_available, -np.inf)
+            for _ in range(n):
+                if not selected:
+                    pick = int(np.argmax(relevance))
+                else:
+                    score = lam * relevance - (1.0 - lam) * max_sim_to_selected
+                    score[selected] = -np.inf
+                    pick = int(np.argmax(score))
+                selected.append(pick)
+                sims_to_pick = emb @ emb[pick]
+                max_sim_to_selected = np.maximum(max_sim_to_selected, sims_to_pick)
+            return [int(topic_indices[i]) for i in selected]
+
+        if strategy == "stratified":
+            distances = np.linalg.norm(topic_embeddings - centroid, axis=1)
+            sorted_local = np.argsort(distances)  # close -> far (local positions)
+
+            # Allocate counts across (close, mid, far) by proportions, floor + remainder to closest.
+            props = self.config.stratified_proportions
+            counts = [int(n * p) for p in props]
+            remainder = n - sum(counts)
+            counts[0] += remainder
+
+            # Split sorted indices into 3 equal bins.
+            bins = np.array_split(sorted_local, 3)
+
+            picked: list[int] = []
+            leftover = 0
+            for bin_idx, take in enumerate(counts):
+                take_total = take + leftover
+                available = bins[bin_idx]
+                actual = min(take_total, len(available))
+                picked.extend(int(x) for x in available[:actual])
+                leftover = take_total - actual
+
+            # If any bins were short, fill remaining from closest-first across the topic.
+            if len(picked) < n:
+                picked_set = set(picked)
+                for i in sorted_local:
+                    if int(i) not in picked_set:
+                        picked.append(int(i))
+                        picked_set.add(int(i))
+                        if len(picked) >= n:
+                            break
+
+            return [int(topic_indices[i]) for i in picked[:n]]
+
+        # Unknown strategy: fall back to centroid.
+        distances = np.linalg.norm(topic_embeddings - centroid, axis=1)
+        order = np.argsort(distances)[:n]
+        return [int(topic_indices[i]) for i in order]
+
     def _extract_topic_info(self, documents: list[str]) -> None:
         """Extract keywords and representative documents for each topic."""
         self.topics_ = []
@@ -782,21 +876,24 @@ class TriTopic:
             mask = self.labels_ == label
             topic_indices = np.where(mask)[0]
             topic_docs = [documents[i] for i in topic_indices]
-            
+
             # Extract keywords
             keywords, scores = self._keyword_extractor.extract(
-                topic_docs, 
+                topic_docs,
                 all_docs=documents,
                 n_keywords=self.config.n_keywords,
             )
-            
-            # Find representative documents (closest to centroid)
+
+            # Find representative documents per configured sampling strategy
             if self.embeddings_ is not None and label != -1:
                 topic_embeddings = self.embeddings_[mask]
                 centroid = topic_embeddings.mean(axis=0)
-                distances = np.linalg.norm(topic_embeddings - centroid, axis=1)
-                top_indices = np.argsort(distances)[:self.config.n_representative_docs]
-                representative_docs = [int(topic_indices[i]) for i in top_indices]
+                representative_docs = self._select_representative_docs(
+                    topic_indices,
+                    topic_embeddings,
+                    centroid,
+                    self.config.n_representative_docs,
+                )
             else:
                 representative_docs = list(topic_indices[:self.config.n_representative_docs])
             
@@ -1554,7 +1651,20 @@ class TriTopic:
         topic = self.get_topic(topic_id)
         if topic is None:
             raise ValueError(f"Topic {topic_id} not found.")
-        
+
+        # If the caller wants more docs than were precomputed at fit time,
+        # re-run the configured sampling strategy over the full topic membership.
+        if n_docs > len(topic.representative_docs) and self.embeddings_ is not None and topic_id != -1:
+            mask = self.labels_ == topic_id
+            topic_indices = np.where(mask)[0]
+            if len(topic_indices) > 0:
+                topic_embeddings = self.embeddings_[mask]
+                centroid = topic_embeddings.mean(axis=0)
+                indices = self._select_representative_docs(
+                    topic_indices, topic_embeddings, centroid, n_docs,
+                )
+                return [(idx, self.documents_[idx]) for idx in indices]
+
         indices = topic.representative_docs[:n_docs]
         return [(idx, self.documents_[idx]) for idx in indices]
     
