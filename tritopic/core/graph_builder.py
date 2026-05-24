@@ -386,12 +386,14 @@ class GraphBuilder:
         precomputed = self._compute_knn(embeddings, n_neighbors)
         _, indices, _ = precomputed
 
-        mutual_adj = self.build_mutual_knn_graph(
-            embeddings, n_neighbors, _precomputed=precomputed
-        )
-        snn_adj = self.build_snn_graph(
-            embeddings, n_neighbors, _precomputed_indices=indices
-        )
+        with step_timer("mutual-knn", verbose=self.verbose, indent=12):
+            mutual_adj = self.build_mutual_knn_graph(
+                embeddings, n_neighbors, _precomputed=precomputed
+            )
+        with step_timer("snn", verbose=self.verbose, indent=12):
+            snn_adj = self.build_snn_graph(
+                embeddings, n_neighbors, _precomputed_indices=indices
+            )
 
         # Normalize both
         mutual_max = mutual_adj.max() if mutual_adj.nnz > 0 else 1
@@ -595,14 +597,17 @@ class GraphBuilder:
         n_samples = semantic_embeddings.shape[0]
 
         # Build semantic graph
-        if self.graph_type == "knn":
-            semantic_adj = self.build_knn_graph(semantic_embeddings)
-        elif self.graph_type == "mutual_knn":
-            semantic_adj = self.build_mutual_knn_graph(semantic_embeddings)
-        elif self.graph_type == "snn":
-            semantic_adj = self.build_snn_graph(semantic_embeddings)
-        else:  # hybrid
-            semantic_adj = self.build_hybrid_graph(semantic_embeddings)
+        if self.verbose:
+            print(f"         > {self.graph_type} semantic graph ({n_samples:,} docs)...")
+        with step_timer("semantic-graph", verbose=self.verbose, indent=9):
+            if self.graph_type == "knn":
+                semantic_adj = self.build_knn_graph(semantic_embeddings)
+            elif self.graph_type == "mutual_knn":
+                semantic_adj = self.build_mutual_knn_graph(semantic_embeddings)
+            elif self.graph_type == "snn":
+                semantic_adj = self.build_snn_graph(semantic_embeddings)
+            else:  # hybrid
+                semantic_adj = self.build_hybrid_graph(semantic_embeddings)
 
         # Normalize
         if semantic_adj.max() > 0:
@@ -628,11 +633,13 @@ class GraphBuilder:
 
         # Add lexical if available
         if has_lexical:
-            lexical_adj = (
-                precomputed_lexical_adj
-                if precomputed_lexical_adj is not None
-                else self.build_lexical_graph(lexical_matrix)
-            )
+            if precomputed_lexical_adj is not None:
+                lexical_adj = precomputed_lexical_adj
+            else:
+                if self.verbose:
+                    print("         > lexical adjacency (on-the-fly)...")
+                with step_timer("lexical-adj", verbose=self.verbose, indent=9):
+                    lexical_adj = self.build_lexical_graph(lexical_matrix)
             if lexical_adj.max() > 0:
                 lexical_adj = lexical_adj / lexical_adj.max()
             combined_adj = combined_adj + active_weights["lexical"] * lexical_adj
@@ -640,9 +647,10 @@ class GraphBuilder:
             # Consensus bonus: edges present in BOTH semantic and lexical
             # views are more reliable -- give them a small boost.
             # Use element-wise minimum (overlap strength) as the bonus.
-            overlap = semantic_adj.minimum(lexical_adj)
-            if overlap.nnz > 0:
-                combined_adj = combined_adj + 0.1 * overlap
+            with step_timer("overlap-bonus", verbose=self.verbose, indent=9):
+                overlap = semantic_adj.minimum(lexical_adj)
+                if overlap.nnz > 0:
+                    combined_adj = combined_adj + 0.1 * overlap
 
         # Add metadata if available
         if has_metadata:
@@ -652,13 +660,19 @@ class GraphBuilder:
         
         # Convert to igraph — combined_adj is symmetric, so take upper triangle
         # to avoid duplicate edges without a Python-level dict loop.
-        combined_adj = combined_adj.tocoo()
-        mask = combined_adj.row < combined_adj.col
-        edges = list(zip(combined_adj.row[mask].tolist(), combined_adj.col[mask].tolist()))
-        weights_list = combined_adj.data[mask].tolist()
-
-        graph = ig.Graph(n=n_samples, edges=edges, directed=False)
-        graph.es["weight"] = weights_list
+        if self.verbose:
+            print("         > converting combined adjacency to igraph...")
+        edges: list = []
+        with step_timer("to-igraph", verbose=self.verbose, indent=9):
+            combined_adj = combined_adj.tocoo()
+            mask = combined_adj.row < combined_adj.col
+            edges = list(zip(combined_adj.row[mask].tolist(), combined_adj.col[mask].tolist()))
+            weights_list = combined_adj.data[mask].tolist()
+            graph = ig.Graph(n=n_samples, edges=edges, directed=False)
+            graph.es["weight"] = weights_list
+        if self.verbose:
+            density = len(edges) / max(n_samples * (n_samples - 1) / 2, 1) * 100
+            print(f"         → {n_samples:,} nodes, {len(edges):,} edges ({density:.3f}% density)")
 
         return graph
     
