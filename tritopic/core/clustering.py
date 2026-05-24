@@ -109,8 +109,12 @@ class ConsensusLeiden:
             )
             return np.array(part.membership)
 
+        # prefer="threads" so the GIL doesn't block leidenalg's C backend, but
+        # cap at n_jobs=4 — running all n_runs in parallel multiplies C-level
+        # partition memory by n_jobs concurrent allocations.
+        parallel_jobs = min(self.n_jobs if self.n_jobs > 0 else 4, 4)
         seeds = [self.random_state + run for run in range(self.n_runs)]
-        self._all_partitions = Parallel(n_jobs=self.n_jobs, prefer="threads")(
+        self._all_partitions = Parallel(n_jobs=parallel_jobs, prefer="threads")(
             delayed(_run_one)(seed) for seed in seeds
         )
 
@@ -148,9 +152,13 @@ class ConsensusLeiden:
         # For each partition, create a cluster-membership indicator matrix M
         # (n_nodes × n_clusters) and accumulate M @ M.T.  The resulting
         # matrix stores how often each pair of nodes was co-clustered.
-        ones_dtype = np.float32 if self.low_memory else np.float64
+        # Use float32 always for co_occur accumulation — the values are integer
+        # counts in [0, n_runs], so float32 is exact and halves peak RAM vs float64.
+        # The final frequency division happens after converting to float64 slices.
+        ones_dtype = np.float32
         co_occur = None
-        for partition in partitions:
+        tau = float(self.consensus_threshold_tau)
+        for r_idx, partition in enumerate(partitions):
             unique_ids = np.unique(partition)
             cluster_map = {cid: idx for idx, cid in enumerate(unique_ids)}
             cols = np.array([cluster_map[c] for c in partition])
@@ -163,6 +171,16 @@ class ConsensusLeiden:
                 co_occur = co_run
             else:
                 co_occur = co_occur + co_run
+
+            # Early pruning: after run r_idx, an entry with count v can reach
+            # at most v + (n_runs - r_idx - 1) in the end.  If that ceiling
+            # is below the threshold we need, the entry can never qualify —
+            # drop it now to keep co_occur sparse throughout accumulation.
+            runs_remaining = n_runs - r_idx - 1
+            min_reachable = tau * n_runs - runs_remaining
+            if min_reachable > 1.0:  # only prune when threshold is meaningful
+                co_occur = co_occur.multiply(co_occur >= min_reachable)
+                co_occur.eliminate_zeros()
 
         if self.consensus_method == "graph":
             return self._consensus_via_leiden_on_graph(
@@ -281,9 +299,9 @@ class ConsensusLeiden:
         import igraph as ig
         import leidenalg as la
 
-        # Symmetrize sparsely and pull out the upper-triangle COO entries.
-        co = (co_occur + co_occur.T) * 0.5
-        coo = co.tocoo()
+        # co_occur is already symmetric (each M @ M.T term is symmetric and
+        # accumulation preserves symmetry) — no copy needed.
+        coo = co_occur.tocoo()
         coo.sum_duplicates()
 
         mask_upper = coo.row < coo.col

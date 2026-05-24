@@ -324,8 +324,8 @@ config = TriTopicConfig(
     # --- Misc ---
     random_state=42,
     verbose=True,
-    low_memory=False,                      # see "Memory Optimization" section
-    n_jobs=-1,                             # parallelism: -1 = all cores (Leiden runs, kNN, ARI)
+    low_memory=False,                      # only affects hierarchical consensus path; graph mode ignores it
+    n_jobs=-1,                             # parallelism: -1 = all cores (kNN, ARI); Leiden runs capped at 4
 )
 
 model = TriTopic(config=config)
@@ -387,14 +387,16 @@ The new default `consensus_method="graph"` (Lancichinetti & Fortunato, *Consensu
 
 Quality is at least as good — the LF paper shows graph consensus improves stability and accuracy versus any single Leiden run. You do not need to do anything: the new default is on automatically.
 
+> **Implementation note:** The co-occurrence matrix is accumulated in float32 (halving dtype overhead vs float64) and pruned after each Leiden run — entries that can no longer reach the τ threshold are dropped immediately, so the matrix stays sparse throughout rather than growing to its maximum at the final run. Parallel Leiden runs are capped at 4 concurrent threads regardless of `n_jobs`, preventing 10× peak C-level allocations from all runs landing in memory simultaneously.
+
 ### When to touch the knobs
 
 | Situation | What to do |
 |---|---|
-| Any size, default install | **Nothing.** The 2.3.0 default is already memory-safe. |
+| Any size, default install | **Nothing.** The default is already memory-safe with automatic float32, early pruning, and capped parallelism. |
 | You want stricter / looser consensus | Tune `consensus_threshold_tau` in `[0.3, 0.8]`. Higher τ = stricter (fewer, tighter topics). |
 | You want bit-for-bit identical results to TriTopic 2.2.x | Set `consensus_method="hierarchical"`. See below. |
-| You hit an OOM crash | Make sure you are on 2.3.0+ and using `consensus_method="graph"` (default). |
+| You still hit an OOM crash | Lower `n_consensus_runs` (e.g. 5) or lower `consensus_threshold_tau` (e.g. 0.3, more aggressive pruning). |
 
 ### Tuning the consensus threshold τ
 
@@ -430,23 +432,23 @@ pip install tritopic[legacy-consensus]
 
 ### What does `low_memory=True` still do?
 
-In **graph mode** (default), `low_memory` only affects internal dtype choices (float32 vs float64 in the co-occurrence matrix) — the big win is already free.
+In **graph mode** (default), `low_memory` has **no effect** — float32 is used automatically and early pruning keeps the co-occurrence matrix lean throughout accumulation. No action needed.
 
 In **hierarchical mode**, `low_memory=True` keeps the co-occurrence sparse and builds the condensed distance vector directly from it, saving ~7-20× on peak RAM versus the dense path. Same math, same topics, same `random_state`.
 
 ### Still want more headroom?
 
-Independent of consensus method, these knobs trade a little quality for memory:
+The main consensus optimizations (float32, early pruning, 4-thread cap) are automatic. If you still need more room, these knobs trade a little quality for memory:
 
 ```python
 config = TriTopicConfig(
     max_iterations=2,            # was 5. Refinement gains are mostly in rounds 1-2.
-    n_consensus_runs=5,          # was 10. Slightly less stable, ~1% NMI drop.
+    n_consensus_runs=5,          # was 10. Fewer runs = smaller co-occurrence matrix peak.
     convergence_threshold=0.90,  # was 0.95. Stops one iteration sooner.
 )
 ```
 
-Combined, these typically give an additional 2-3× headroom with under 2% quality loss.
+Lowering `n_consensus_runs` is the strongest lever here: fewer runs means the co-occurrence matrix accumulates fewer non-zeros, and early pruning kicks in sooner. Combined, these typically give an additional 2-3× headroom with under 2% quality loss.
 
 ---
 
@@ -550,7 +552,7 @@ You can ignore the warning and use the resulting model normally.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Crash at `Iteration 1...` with no traceback | Out of memory in consensus step | Set `low_memory=True` (see [section above](#memory-optimization-for-large-datasets)) |
+| Crash at `Iteration 1...` with no traceback | Out of memory in consensus step | Lower `n_consensus_runs` (e.g. 5) or `consensus_threshold_tau` (e.g. 0.3); `low_memory=True` only helps the legacy `hierarchical` path |
 | `ImportError: cannot import name '...' from 'transformers'` in Colab | Colab silently upgraded torch/transformers mid-session | **Runtime -> Restart session**, then rerun |
 | Too many tiny topics | `resolution` too high or `min_cluster_size` too low | Lower `resolution` (e.g. 0.8) or raise `min_cluster_size` |
 | Too few large topics | `resolution` too low | Raise `resolution` (e.g. 1.3) or set `n_topics_target=N` |
