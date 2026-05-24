@@ -70,6 +70,7 @@ dependencies = [
     "tqdm>=4.60.0",
     "rank-bm25>=0.2.0",
     "keybert>=0.7.0",
+    "psutil>=5.9.0",
 ]
 
 [project.optional-dependencies]

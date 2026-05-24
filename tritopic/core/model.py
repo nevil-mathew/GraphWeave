@@ -21,6 +21,7 @@ from tritopic.core.clustering import ConsensusLeiden
 from tritopic.core.keywords import KeywordExtractor
 from tritopic.core.hierarchy import TopicNode, TopicHierarchy
 from tritopic.utils.metrics import compute_coherence, compute_diversity, compute_stability
+from tritopic.utils.timing import step_timer
 
 
 @dataclass
@@ -273,6 +274,7 @@ class TriTopic:
             task_type=self.config.embedding_task_type,
             batch_delay=self.config.embedding_batch_delay,
             prefix=self.config.embedding_prefix,
+            verbose=self.config.verbose,
         )
         self._graph_builder = GraphBuilder(
             n_neighbors=self.config.n_neighbors,
@@ -363,12 +365,15 @@ class TriTopic:
         self._keyword_extractor.reset()
         self._iteration_history = []
 
+        import time as _time
+        _fit_t0 = _time.perf_counter()
+
         if self.config.verbose:
             print(f"[TriTopic] Fitting model on {n_docs} documents")
             print(f"   Config: {self.config.graph_type} graph, "
                   f"{'iterative' if self.config.use_iterative_refinement else 'single-pass'} mode"
                   f"{', low_memory=True' if self.config.low_memory else ''}")
-        
+
         # Step 1: Generate embeddings
         if embeddings is not None:
             self.embeddings_ = embeddings
@@ -381,8 +386,9 @@ class TriTopic:
                     if self.config.embedding_provider != "local"
                     else self.config.embedding_model
                 )
-                print(f"   > Generating embeddings ({provider_tag})...")
-            self.embeddings_ = self._embedding_engine.encode(documents)
+                print(f"   > Encoding {n_docs} documents ({provider_tag})...")
+            with step_timer("encode", verbose=self.config.verbose):
+                self.embeddings_ = self._embedding_engine.encode(documents)
 
         # Keep unrefined copy so transform() compares new docs in the same space
         self.original_embeddings_ = self.embeddings_.copy()
@@ -394,8 +400,12 @@ class TriTopic:
         # Step 2: Build lexical representation
         if self.config.use_lexical_view:
             if self.config.verbose:
-                print("   > Building lexical similarity matrix...")
-            self.lexical_matrix_ = self._graph_builder.build_lexical_matrix(documents)
+                print("   > Building TF-IDF lexical matrix...")
+            with step_timer("tfidf-matrix", verbose=self.config.verbose):
+                self.lexical_matrix_ = self._graph_builder.build_lexical_matrix(documents)
+            if self.config.verbose and self.lexical_matrix_ is not None:
+                m = self.lexical_matrix_
+                print(f"      shape={m.shape}, nnz={m.nnz} (sparsity {100*(1-m.nnz/max(m.shape[0]*m.shape[1],1)):.1f}%)")
         
         # Step 3: Build metadata graph (if provided)
         self._metadata_graph = None
@@ -413,7 +423,8 @@ class TriTopic:
         # Step 5: Extract keywords and representative docs
         if self.config.verbose:
             print("   > Extracting keywords and representative documents...")
-        self._extract_topic_info(documents)
+        with step_timer("keywords", verbose=self.config.verbose):
+            self._extract_topic_info(documents)
         
         # Step 6: Compute topic centroids
         self._compute_topic_centroids()
@@ -433,9 +444,11 @@ class TriTopic:
                 )
 
         if self.config.verbose:
+            import time as _time
+            _total = _time.perf_counter() - _fit_t0
             n_topics = len([t for t in self.topics_ if t.topic_id != -1])
             n_outliers = np.sum(self.labels_ == -1) if self.labels_ is not None else 0
-            print(f"\n[OK] Fitting complete!")
+            print(f"\n[OK] Fitting complete!  (total: {_total:.1f} s)")
             print(f"   Found {n_topics} topics")
             print(f"   {n_outliers} outlier documents ({100*n_outliers/n_docs:.1f}%)")
 
@@ -454,25 +467,27 @@ class TriTopic:
         # Use reduced embeddings for graph building if available
         graph_embeddings = self.reduced_embeddings_ if self.reduced_embeddings_ is not None else self.embeddings_
 
-        self.graph_ = self._graph_builder.build_multiview_graph(
-            semantic_embeddings=graph_embeddings,
-            lexical_matrix=self.lexical_matrix_ if self.config.use_lexical_view else None,
-            metadata_graph=metadata_graph,
-            weights={
-                "semantic": self.config.semantic_weight,
-                "lexical": self.config.lexical_weight,
-                "metadata": self.config.metadata_weight,
-            }
-        )
-        
+        with step_timer("graph-build", verbose=self.config.verbose):
+            self.graph_ = self._graph_builder.build_multiview_graph(
+                semantic_embeddings=graph_embeddings,
+                lexical_matrix=self.lexical_matrix_ if self.config.use_lexical_view else None,
+                metadata_graph=metadata_graph,
+                weights={
+                    "semantic": self.config.semantic_weight,
+                    "lexical": self.config.lexical_weight,
+                    "metadata": self.config.metadata_weight,
+                }
+            )
+
         # Cluster
         if self.config.verbose:
             print(f"   > Running Leiden consensus clustering ({self.config.n_consensus_runs} runs)...")
-            
-        self.labels_ = self._clusterer.fit_predict(
-            self.graph_,
-            min_cluster_size=self.config.min_cluster_size,
-        )
+
+        with step_timer("leiden", verbose=self.config.verbose):
+            self.labels_ = self._clusterer.fit_predict(
+                self.graph_,
+                min_cluster_size=self.config.min_cluster_size,
+            )
     
     def _fit_iterative(
         self,
@@ -495,34 +510,39 @@ class TriTopic:
         # immutable TF-IDF matrix and never changes between iterations.
         precomputed_lexical_adj = None
         if self.config.use_lexical_view and self.lexical_matrix_ is not None:
-            precomputed_lexical_adj = self._graph_builder.build_lexical_graph(
-                self.lexical_matrix_
-            )
+            if self.config.verbose:
+                print("   > Precomputing lexical similarity graph...")
+            with step_timer("lexical-graph", verbose=self.config.verbose):
+                precomputed_lexical_adj = self._graph_builder.build_lexical_graph(
+                    self.lexical_matrix_
+                )
 
         for iteration in range(self.config.max_iterations):
             if self.config.verbose:
-                print(f"      Iteration {iteration + 1}...")
+                print(f"      Iteration {iteration + 1} / {self.config.max_iterations}...")
 
             # Build graph with reduced embeddings (or full if no reduction)
             graph_embeddings = current_reduced if current_reduced is not None else current_embeddings
-            self.graph_ = self._graph_builder.build_multiview_graph(
-                semantic_embeddings=graph_embeddings,
-                lexical_matrix=self.lexical_matrix_ if self.config.use_lexical_view else None,
-                metadata_graph=metadata_graph,
-                weights={
-                    "semantic": self.config.semantic_weight,
-                    "lexical": self.config.lexical_weight,
-                    "metadata": self.config.metadata_weight,
-                },
-                precomputed_lexical_adj=precomputed_lexical_adj,
-            )
+            with step_timer("graph-build", verbose=self.config.verbose, indent=9):
+                self.graph_ = self._graph_builder.build_multiview_graph(
+                    semantic_embeddings=graph_embeddings,
+                    lexical_matrix=self.lexical_matrix_ if self.config.use_lexical_view else None,
+                    metadata_graph=metadata_graph,
+                    weights={
+                        "semantic": self.config.semantic_weight,
+                        "lexical": self.config.lexical_weight,
+                        "metadata": self.config.metadata_weight,
+                    },
+                    precomputed_lexical_adj=precomputed_lexical_adj,
+                )
 
             # Cluster — skip stability during refinement; computed once after loop
-            self.labels_ = self._clusterer.fit_predict(
-                self.graph_,
-                min_cluster_size=self.config.min_cluster_size,
-                compute_stability=False,
-            )
+            with step_timer("leiden", verbose=self.config.verbose, indent=9):
+                self.labels_ = self._clusterer.fit_predict(
+                    self.graph_,
+                    min_cluster_size=self.config.min_cluster_size,
+                    compute_stability=False,
+                )
 
             n_topics_found = len(np.unique(self.labels_[self.labels_ != -1]))
 
@@ -714,7 +734,7 @@ class TriTopic:
         """Reduce embedding dimensionality for better graph construction."""
         if self.config.verbose:
             print(f"   > Reducing dimensions to {self.config.reduced_dims}d "
-                  f"({self.config.dim_reduction_method})...")
+                  f"({self.config.dim_reduction_method.upper()})...")
 
         if self.config.dim_reduction_method == "umap":
             from umap import UMAP
@@ -735,7 +755,8 @@ class TriTopic:
         else:
             raise ValueError(f"Unknown dim_reduction_method: {self.config.dim_reduction_method}")
 
-        self.reduced_embeddings_ = self._dim_reducer.fit_transform(self.embeddings_)
+        with step_timer(self.config.dim_reduction_method, verbose=self.config.verbose):
+            self.reduced_embeddings_ = self._dim_reducer.fit_transform(self.embeddings_)
 
     def _compute_probabilities(self) -> None:
         """Compute soft topic assignment probabilities for training documents."""

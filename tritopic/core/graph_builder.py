@@ -17,6 +17,7 @@ from scipy.sparse import csr_matrix
 from sklearn.neighbors import NearestNeighbors
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from tritopic.utils.timing import step_timer
 
 
 class GraphBuilder:
@@ -144,8 +145,9 @@ class GraphBuilder:
             algorithm="auto",
             n_jobs=self.n_jobs,
         )
-        nn.fit(embeddings)
-        distances, indices = nn.kneighbors(embeddings)
+        with step_timer("knn-exact", verbose=self.verbose, indent=9):
+            nn.fit(embeddings)
+            distances, indices = nn.kneighbors(embeddings)
 
         if self.metric == "cosine":
             similarities = 1 - distances
@@ -192,9 +194,11 @@ class GraphBuilder:
             random_seed=int(self.random_state) if self.random_state is not None else 100,
         )
         index.set_ef(max(ef_search, k_query))
-        index.add_items(data, ids, num_threads=num_threads)
+        with step_timer("hnsw-build", verbose=self.verbose, indent=9):
+            index.add_items(data, ids, num_threads=num_threads)
 
-        labels, distances = index.knn_query(data, k=k_query, num_threads=num_threads)
+        with step_timer("hnsw-query", verbose=self.verbose, indent=9):
+            labels, distances = index.knn_query(data, k=k_query, num_threads=num_threads)
         indices = labels.astype(np.int64, copy=False)
         distances = distances.astype(np.float64, copy=False)
 
@@ -452,8 +456,9 @@ class GraphBuilder:
             algorithm="brute",
             n_jobs=self.n_jobs,
         )
-        nn.fit(tfidf_matrix)
-        distances, indices = nn.kneighbors(tfidf_matrix)
+        with step_timer("lexical-knn", verbose=self.verbose, indent=6):
+            nn.fit(tfidf_matrix)
+            distances, indices = nn.kneighbors(tfidf_matrix)
 
         similarities = 1 - distances
 

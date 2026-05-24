@@ -96,6 +96,7 @@ class EmbeddingEngine:
         task_type: str | None = None,
         batch_delay: float = 0.0,
         prefix: str | None = None,
+        verbose: bool = False,
     ):
         self.model_name = model_name
         self.batch_size = batch_size
@@ -108,6 +109,7 @@ class EmbeddingEngine:
         self.task_type = task_type
         self.batch_delay = batch_delay
         self.prefix = prefix
+        self.verbose = verbose
 
         self._model: Any = None    # local SentenceTransformer (lazy)
         self._client: Any = None   # API client (lazy)
@@ -171,10 +173,15 @@ class EmbeddingEngine:
         if self._model is not None:
             return
         from sentence_transformers import SentenceTransformer
-        self._model = SentenceTransformer(
-            self.model_name,
-            device=self.device,
-        )
+        from tritopic.utils.timing import step_timer
+
+        if self.verbose:
+            print(f"   > Loading sentence-transformer weights ({self.model_name})...")
+        with step_timer("model-load", verbose=self.verbose):
+            self._model = SentenceTransformer(
+                self.model_name,
+                device=self.device,
+            )
 
     # ------------------------------------------------------------------
     # Provider-specific encode implementations
