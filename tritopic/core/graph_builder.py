@@ -105,6 +105,10 @@ class GraphBuilder:
         Adaptive dispatcher: exact sklearn for small corpora, hnswlib HNSW for
         mid/large. Output shape/dtype/self-at-col-0 contract is identical
         across backends so downstream graph construction is backend-agnostic.
+
+        If the HNSW path raises for any reason (missing wheel, native crash
+        wrapped in BaseException, etc.), fall back to the exact path so a
+        single bad ANN call cannot kill the kernel.
         """
         k = n_neighbors or self.n_neighbors
         n_samples = embeddings.shape[0]
@@ -115,7 +119,16 @@ class GraphBuilder:
 
         if backend == "exact":
             return self._compute_knn_exact(embeddings, k)
-        return self._compute_knn_hnsw(embeddings, k, backend)
+
+        try:
+            return self._compute_knn_hnsw(embeddings, k, backend)
+        except Exception as exc:
+            if self.verbose:
+                print(
+                    f"      kNN backend: HNSW failed ({type(exc).__name__}: {exc}); "
+                    f"falling back to exact."
+                )
+            return self._compute_knn_exact(embeddings, k)
 
     def _compute_knn_exact(
         self,
@@ -163,20 +176,25 @@ class GraphBuilder:
             M, ef_construction, ef_search = 16, 200, 200
 
         data = np.ascontiguousarray(embeddings, dtype=np.float32)
+        ids = np.arange(n_samples, dtype=np.uint32)
+
+        # n_jobs<=0 means "use all cores" in sklearn convention; hnswlib
+        # interprets num_threads<=0 the same way (default = OS core count).
+        # Pass num_threads per-call rather than via set_num_threads, which
+        # is missing on some hnswlib builds.
+        num_threads = self.n_jobs if (self.n_jobs and self.n_jobs > 0) else -1
 
         index = hnswlib.Index(space="cosine", dim=dim)
         index.init_index(
             max_elements=n_samples,
             ef_construction=ef_construction,
             M=M,
-            random_seed=self.random_state,
+            random_seed=int(self.random_state) if self.random_state is not None else 100,
         )
-        num_threads = self.n_jobs if self.n_jobs and self.n_jobs > 0 else 0
-        index.set_num_threads(num_threads)
-        index.add_items(data, np.arange(n_samples))
         index.set_ef(max(ef_search, k_query))
+        index.add_items(data, ids, num_threads=num_threads)
 
-        labels, distances = index.knn_query(data, k=k_query)
+        labels, distances = index.knn_query(data, k=k_query, num_threads=num_threads)
         indices = labels.astype(np.int64, copy=False)
         distances = distances.astype(np.float64, copy=False)
 
