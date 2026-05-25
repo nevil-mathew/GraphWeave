@@ -143,42 +143,60 @@ class ConsensusLeiden:
         - ``"hierarchical"`` (legacy): average-linkage on the full
           co-occurrence distance.  Peak memory ~O(N²); use only for small N.
         """
-        from scipy.sparse import csr_matrix as sp_csr
+        import math
+        from scipy.sparse import coo_matrix as sp_coo
 
         n_nodes = len(partitions[0])
         n_runs = len(partitions)
-
-        # Build co-occurrence matrix efficiently using sparse outer products.
-        # For each partition, create a cluster-membership indicator matrix M
-        # (n_nodes × n_clusters) and accumulate M @ M.T.  The resulting
-        # matrix stores how often each pair of nodes was co-clustered.
-        # Use float32 always for co_occur accumulation — the values are integer
-        # counts in [0, n_runs], so float32 is exact and halves peak RAM vs float64.
-        # The final frequency division happens after converting to float64 slices.
-        ones_dtype = np.float32
-        co_occur = None
         tau = float(self.consensus_threshold_tau)
-        for r_idx, partition in enumerate(partitions):
-            unique_ids = np.unique(partition)
-            cluster_map = {cid: idx for idx, cid in enumerate(unique_ids)}
-            cols = np.array([cluster_map[c] for c in partition])
-            rows = np.arange(n_nodes)
-            data = np.ones(n_nodes, dtype=ones_dtype)
-            M = sp_csr((data, (rows, cols)), shape=(n_nodes, len(unique_ids)))
-            # M @ M.T is the co-membership matrix for this partition (sparse)
-            co_run = M.dot(M.T)
-            if co_occur is None:
-                co_occur = co_run
-            else:
-                co_occur = co_occur + co_run
+        # Integer threshold: e.g. tau=0.5, n_runs=10 → 5 runs must agree.
+        # math.ceil makes the intent explicit for non-integer products (e.g. 0.6×7=4.2→5).
+        threshold_count = math.ceil(tau * n_runs)
 
-            # Early pruning: after run r_idx, an entry with count v can reach
-            # at most v + (n_runs - r_idx - 1) in the end.  If that ceiling
-            # is below the threshold we need, the entry can never qualify —
-            # drop it now to keep co_occur sparse throughout accumulation.
+        co_occur = None
+        for r_idx, partition in enumerate(partitions):
+            # Group node indices by cluster for this run.
+            cluster_to_nodes: dict[int, list[int]] = {}
+            for node_idx, cluster_id in enumerate(partition):
+                cluster_to_nodes.setdefault(int(cluster_id), []).append(node_idx)
+
+            # Enumerate upper-triangle pairs (i < j, no diagonal) within each cluster.
+            # Upper triangle only: the downstream consumer at line 307 reads only
+            # coo.row < coo.col, so lower-triangle and diagonal entries are always
+            # discarded — no point computing or storing them.
+            # This replaces the M @ M.T approach: same counts, no M matrix, no
+            # intermediate co_run dense step, half the pairs to store.
+            run_rows: list[np.ndarray] = []
+            run_cols: list[np.ndarray] = []
+            for members in cluster_to_nodes.values():
+                if len(members) < 2:
+                    continue
+                m = np.asarray(members, dtype=np.int32)
+                ii, jj = np.triu_indices(len(m), k=1)  # k=1 skips diagonal
+                run_rows.append(m[ii])
+                run_cols.append(m[jj])
+
+            if not run_rows:
+                continue
+
+            r = np.concatenate(run_rows)
+            c = np.concatenate(run_cols)
+            # int16: counts ∈ [0, n_runs ≤ 32k], 2 bytes vs float32's 4 bytes.
+            # Each node is in exactly one cluster per run, so no duplicate (r,c)
+            # pairs exist within a single run — .tocsr() handles conversion cleanly.
+            co_run = sp_coo(
+                (np.ones(len(r), dtype=np.int16), (r, c)),
+                shape=(n_nodes, n_nodes),
+            ).tocsr()
+
+            co_occur = co_run if co_occur is None else co_occur + co_run
+
+            # Early pruning: after run r_idx, the max a pair can still reach is
+            # current_count + runs_remaining.  Drop pairs whose ceiling falls
+            # below threshold_count — they can never survive the final cut.
             runs_remaining = n_runs - r_idx - 1
-            min_reachable = tau * n_runs - runs_remaining
-            if min_reachable > 1.0:  # only prune when threshold is meaningful
+            min_reachable = threshold_count - runs_remaining
+            if min_reachable > 1:
                 co_occur = co_occur.multiply(co_occur >= min_reachable)
                 co_occur.eliminate_zeros()
 
