@@ -207,6 +207,12 @@ class ConsensusLeiden:
                 co_occur.data[co_occur.data < min_reachable] = 0
                 co_occur.eliminate_zeros()
 
+        try:
+            import ctypes
+            ctypes.cdll.LoadLibrary("libc.so.6").malloc_trim(0)
+        except (OSError, AttributeError):
+            pass
+
         if self.consensus_method == "graph":
             coo = co_occur.tocoo()
             rows, cols = coo.row, coo.col
@@ -342,6 +348,7 @@ class ConsensusLeiden:
             keep_rows = rows[keep]
             keep_cols = cols[keep]
             keep_weights = freq[keep]
+            del keep
             edge_array = np.column_stack([keep_rows, keep_cols])
             del keep_rows, keep_cols
             n_edges = edge_array.shape[0]
