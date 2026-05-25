@@ -339,11 +339,13 @@ class ConsensusLeiden:
             keep = freq >= threshold
             if not np.any(keep):
                 return None
-            edges = list(zip(rows[keep].tolist(), cols[keep].tolist()))
-            weights = freq[keep].tolist()
-            g = ig.Graph(n=n_nodes, edges=edges, directed=False)
-            g.es["weight"] = weights
-            with step_timer(f"leiden-consensus-run ({len(edges):,} edges)", verbose=self.verbose, indent=15):
+            keep_rows = rows[keep]
+            keep_cols = cols[keep]
+            keep_weights = freq[keep]
+            edge_array = np.column_stack([keep_rows, keep_cols])
+            g = ig.Graph(n=n_nodes, edges=edge_array, directed=False)
+            g.es["weight"] = keep_weights
+            with step_timer(f"leiden-consensus-run ({edge_array.shape[0]:,} edges)", verbose=self.verbose, indent=15):
                 part = la.find_partition(
                     g,
                     la.RBConfigurationVertexPartition,
