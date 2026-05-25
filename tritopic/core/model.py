@@ -297,6 +297,7 @@ class TriTopic:
             consensus_method=self.config.consensus_method,
             consensus_threshold_tau=self.config.consensus_threshold_tau,
             n_jobs=self.config.n_jobs,
+            verbose=self.config.verbose,
         )
         self._keyword_extractor = KeywordExtractor(
             method=self.config.keyword_method,

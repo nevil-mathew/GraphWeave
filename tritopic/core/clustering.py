@@ -49,6 +49,7 @@ class ConsensusLeiden:
         consensus_method: str = "graph",
         consensus_threshold_tau: float = 0.5,
         n_jobs: int = -1,
+        verbose: bool = False,
     ):
         self.resolution = resolution
         self.n_runs = n_runs
@@ -56,6 +57,7 @@ class ConsensusLeiden:
         self.consensus_threshold = consensus_threshold
         self.low_memory = low_memory
         self.n_jobs = n_jobs
+        self.verbose = verbose
         if consensus_method not in ("graph", "hierarchical"):
             raise ValueError(
                 f"consensus_method must be 'graph' or 'hierarchical', got {consensus_method!r}"
@@ -91,11 +93,12 @@ class ConsensusLeiden:
         labels : np.ndarray
             Cluster assignments. -1 for outliers.
         """
+        from tritopic.utils.timing import step_timer
         import leidenalg as la
-        
+
         res = resolution or self.resolution
         n_nodes = graph.vcount()
-        
+
         from joblib import Parallel, delayed
 
         def _run_one(seed: int) -> np.ndarray:
@@ -114,12 +117,14 @@ class ConsensusLeiden:
         # partition memory by n_jobs concurrent allocations.
         parallel_jobs = min(self.n_jobs if self.n_jobs > 0 else 4, 4)
         seeds = [self.random_state + run for run in range(self.n_runs)]
-        self._all_partitions = Parallel(n_jobs=parallel_jobs, prefer="threads")(
-            delayed(_run_one)(seed) for seed in seeds
-        )
+        with step_timer(f"leiden-runs ×{self.n_runs} ({parallel_jobs} concurrent)", verbose=self.verbose, indent=12):
+            self._all_partitions = Parallel(n_jobs=parallel_jobs, prefer="threads")(
+                delayed(_run_one)(seed) for seed in seeds
+            )
 
         # Compute consensus
-        self.labels_ = self._compute_consensus(self._all_partitions)
+        with step_timer("leiden-cooccur", verbose=self.verbose, indent=12):
+            self.labels_ = self._compute_consensus(self._all_partitions)
 
         # Handle small clusters as outliers
         self.labels_ = self._handle_small_clusters(self.labels_, min_cluster_size)
@@ -314,13 +319,13 @@ class ConsensusLeiden:
         consensus partition.  Peak memory is O(E) for E surviving edges,
         avoiding the N×N dense matrix and the scipy.linkage workspace.
         """
+        from tritopic.utils.timing import step_timer
         import igraph as ig
         import leidenalg as la
 
-        # co_occur is already symmetric (each M @ M.T term is symmetric and
-        # accumulation preserves symmetry) — no copy needed.
+        # co_occur is upper-triangle only (streaming accumulation emits row < col).
+        # tocoo() + mask_upper below correctly reads all surviving edges.
         coo = co_occur.tocoo()
-        coo.sum_duplicates()
 
         mask_upper = coo.row < coo.col
         rows = coo.row[mask_upper]
@@ -338,13 +343,14 @@ class ConsensusLeiden:
             weights = freq[keep].tolist()
             g = ig.Graph(n=n_nodes, edges=edges, directed=False)
             g.es["weight"] = weights
-            part = la.find_partition(
-                g,
-                la.RBConfigurationVertexPartition,
-                weights="weight",
-                resolution_parameter=self.resolution,
-                seed=self.random_state,
-            )
+            with step_timer(f"leiden-consensus-run ({len(edges):,} edges)", verbose=self.verbose, indent=15):
+                part = la.find_partition(
+                    g,
+                    la.RBConfigurationVertexPartition,
+                    weights="weight",
+                    resolution_parameter=self.resolution,
+                    seed=self.random_state,
+                )
             return np.asarray(part.membership)
 
         labels = _build_and_cluster(tau)
