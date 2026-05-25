@@ -1361,7 +1361,26 @@ class TriTopic:
         self.fit(documents, embeddings, metadata)
         return self.labels_
     
-    def transform(self, documents: list[str]) -> np.ndarray:
+    def encode(self, documents: list[str]) -> np.ndarray:
+        """
+        Encode documents into embeddings using the configured embedding model.
+
+        Useful for pre-computing embeddings once and reusing them across
+        fit(), transform(), and transform_proba() calls.
+
+        Parameters
+        ----------
+        documents : list[str]
+            Documents to encode.
+
+        Returns
+        -------
+        embeddings : np.ndarray
+            Shape (n_docs, embedding_dim).
+        """
+        return self._embedding_engine.encode(documents)
+
+    def transform(self, documents: list[str], embeddings: np.ndarray | None = None) -> np.ndarray:
         """
         Assign topics to new documents.
 
@@ -1369,6 +1388,8 @@ class TriTopic:
         ----------
         documents : list[str]
             New documents to classify.
+        embeddings : np.ndarray, optional
+            Pre-computed embeddings. If None, computed automatically.
 
         Returns
         -------
@@ -1380,7 +1401,7 @@ class TriTopic:
 
         from sklearn.metrics.pairwise import cosine_similarity
 
-        new_embeddings = self._embedding_engine.encode(documents)
+        new_embeddings = embeddings if embeddings is not None else self._embedding_engine.encode(documents)
 
         non_outlier_topics = [t for t in self.topics_ if t.topic_id != -1]
         topic_ids = np.array([t.topic_id for t in non_outlier_topics])
@@ -1394,7 +1415,7 @@ class TriTopic:
 
         return labels
 
-    def transform_proba(self, documents: list[str]) -> np.ndarray:
+    def transform_proba(self, documents: list[str], embeddings: np.ndarray | None = None) -> np.ndarray:
         """
         Get soft topic assignment probabilities for new documents.
 
@@ -1402,6 +1423,8 @@ class TriTopic:
         ----------
         documents : list[str]
             New documents to classify.
+        embeddings : np.ndarray, optional
+            Pre-computed embeddings. If None, computed automatically.
 
         Returns
         -------
@@ -1414,7 +1437,7 @@ class TriTopic:
         from sklearn.metrics.pairwise import cosine_similarity
         from scipy.special import softmax
 
-        new_embeddings = self._embedding_engine.encode(documents)
+        new_embeddings = embeddings if embeddings is not None else self._embedding_engine.encode(documents)
         sim_matrix = cosine_similarity(new_embeddings, self.topic_embeddings_)
         return softmax(sim_matrix * self.config.softmax_temperature, axis=1)
 
