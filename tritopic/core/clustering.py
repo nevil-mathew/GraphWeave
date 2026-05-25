@@ -176,7 +176,7 @@ class ConsensusLeiden:
             for members in cluster_to_nodes.values():
                 if len(members) < 2:
                     continue
-                m = np.asarray(members, dtype=np.int32)
+                m = np.sort(np.asarray(members, dtype=np.int32))
                 ii, jj = np.triu_indices(len(m), k=1)  # k=1 skips diagonal
                 run_rows.append(m[ii])
                 run_cols.append(m[jj])
@@ -186,6 +186,7 @@ class ConsensusLeiden:
 
             r = np.concatenate(run_rows)
             c = np.concatenate(run_cols)
+            del run_rows, run_cols
             # int16: counts ∈ [0, n_runs ≤ 32k], 2 bytes vs float32's 4 bytes.
             # Each node is in exactly one cluster per run, so no duplicate (r,c)
             # pairs exist within a single run — .tocsr() handles conversion cleanly.
@@ -193,6 +194,7 @@ class ConsensusLeiden:
                 (np.ones(len(r), dtype=np.int16), (r, c)),
                 shape=(n_nodes, n_nodes),
             ).tocsr()
+            del r, c
 
             co_occur = co_run if co_occur is None else co_occur + co_run
 
@@ -202,12 +204,16 @@ class ConsensusLeiden:
             runs_remaining = n_runs - r_idx - 1
             min_reachable = threshold_count - runs_remaining
             if min_reachable > 1:
-                co_occur = co_occur.multiply(co_occur >= min_reachable)
+                co_occur.data[co_occur.data < min_reachable] = 0
                 co_occur.eliminate_zeros()
 
         if self.consensus_method == "graph":
+            coo = co_occur.tocoo()
+            rows, cols = coo.row, coo.col
+            freq = coo.data.astype(np.float64) / float(n_runs)
+            del coo, co_occur
             return self._consensus_via_leiden_on_graph(
-                co_occur, n_nodes, n_runs, partitions
+                rows, cols, freq, n_nodes, n_runs, partitions
             )
 
         # ------------------------------------------------------------------
@@ -305,7 +311,9 @@ class ConsensusLeiden:
 
     def _consensus_via_leiden_on_graph(
         self,
-        co_occur,
+        rows: np.ndarray,
+        cols: np.ndarray,
+        freq: np.ndarray,
         n_nodes: int,
         n_runs: int,
         partitions: list[np.ndarray],
@@ -323,16 +331,8 @@ class ConsensusLeiden:
         import igraph as ig
         import leidenalg as la
 
-        # co_occur is upper-triangle only (streaming accumulation emits row < col).
-        # tocoo() + mask_upper below correctly reads all surviving edges.
-        coo = co_occur.tocoo()
-
-        mask_upper = coo.row < coo.col
-        rows = coo.row[mask_upper]
-        cols = coo.col[mask_upper]
-        # Co-clustering frequency in [0, 1].
-        freq = coo.data[mask_upper].astype(np.float64) / float(n_runs)
-
+        # rows/cols/freq: upper-triangle pairs extracted by caller so co_occur
+        # can be freed before igraph allocates its own graph structure.
         tau = float(self.consensus_threshold_tau)
 
         def _build_and_cluster(threshold: float) -> np.ndarray | None:
@@ -343,9 +343,13 @@ class ConsensusLeiden:
             keep_cols = cols[keep]
             keep_weights = freq[keep]
             edge_array = np.column_stack([keep_rows, keep_cols])
+            del keep_rows, keep_cols
+            n_edges = edge_array.shape[0]
             g = ig.Graph(n=n_nodes, edges=edge_array, directed=False)
+            del edge_array
             g.es["weight"] = keep_weights
-            with step_timer(f"leiden-consensus-run ({edge_array.shape[0]:,} edges)", verbose=self.verbose, indent=15):
+            del keep_weights
+            with step_timer(f"leiden-consensus-run ({n_edges:,} edges)", verbose=self.verbose, indent=15):
                 part = la.find_partition(
                     g,
                     la.RBConfigurationVertexPartition,
@@ -353,7 +357,9 @@ class ConsensusLeiden:
                     resolution_parameter=self.resolution,
                     seed=self.random_state,
                 )
-            return np.asarray(part.membership)
+            labels = np.asarray(part.membership)
+            del part, g
+            return labels
 
         labels = _build_and_cluster(tau)
 
