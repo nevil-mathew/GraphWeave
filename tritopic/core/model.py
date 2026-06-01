@@ -162,6 +162,46 @@ class TriTopicConfig:
     # Parallelism: -1 uses all available cores (joblib / sklearn convention).
     n_jobs: int = -1
 
+    # ------------------------------------------------------------------ #
+    # Streaming mode (POC).  When mode == "streaming", TriTopic acts as a
+    # facade that delegates to StreamingTriTopic.  Single-shot mode is
+    # untouched.  All fields below are ignored when mode == "single".
+    # ------------------------------------------------------------------ #
+    mode: Literal["single", "streaming"] = "single"
+
+    # Routing thresholds are calibrated per-theme from batch 1's within-cluster
+    # cosine distribution.  These percentiles control where assign / review
+    # cutoffs land.
+    assign_threshold_percentile: int = 25
+    review_threshold_percentile: int = 5
+
+    # Size-weighted running-mean centroid update.  effective_n is decayed by
+    # this factor before each batch is mixed in; <1.0 favours recency.
+    centroid_decay: float = 0.95
+
+    # Reseed: when the unassigned pool reaches this many docs, run a sub-fit
+    # to discover new clusters; merge into existing themes or emerge as new.
+    reseed_pool_size: int = 200
+
+    # Merge new sub-clusters into existing themes when 0.5*cos + 0.5*jaccard
+    # >= merge_threshold.
+    merge_threshold: float = 0.60
+
+    # Two emerging clusters merge when their centroid cosine >= this.
+    emerging_merge_threshold: float = 0.85
+
+    # Promote an emerging cluster to a Theme when ALL three hold.
+    promote_min_batches: int = 2
+    promote_min_docs: int = 500
+    promote_min_coherence: float = 0.65
+
+    # Periodic full-refit checkpoint.  0 disables.
+    refit_every_n_batches: int = 10
+
+    # Keyword refresh between full refits.  0 disables.
+    keyword_refresh_every_n_batches: int = 2
+    keyword_refresh_min_new_docs: int = 50
+
 
 class TriTopic:
     """
@@ -263,6 +303,35 @@ class TriTopic:
 
         self.n_topics = n_topics
 
+        # Streaming facade: when mode == "streaming", this TriTopic instance is
+        # a thin shell that forwards public calls to an internal StreamingTriTopic.
+        # The streaming backend itself builds a separate single-mode TriTopic on
+        # batch 1, so we don't need to construct the heavy engines here.
+        self._streaming_backend = None
+        if self.config.mode == "streaming":
+            from tritopic.streaming.router import StreamingTriTopic
+            self._streaming_backend = StreamingTriTopic(self.config)
+            self._embedding_engine = None
+            self._graph_builder = None
+            self._clusterer = None
+            self._keyword_extractor = None
+            self.topics_: list[TopicInfo] = []
+            self.labels_: np.ndarray | None = None
+            self.embeddings_: np.ndarray | None = None
+            self.original_embeddings_: np.ndarray | None = None
+            self.reduced_embeddings_: np.ndarray | None = None
+            self.probabilities_: np.ndarray | None = None
+            self.lexical_matrix_: Any | None = None
+            self.graph_: Any | None = None
+            self.topic_embeddings_: np.ndarray | None = None
+            self.documents_: list[str] | None = None
+            self.hierarchy_: TopicHierarchy | None = None
+            self.report_themes_: list[ReportTheme] | None = None
+            self._is_fitted: bool = False
+            self._iteration_history: list[dict] = []
+            self._dim_reducer: Any | None = None
+            return
+
         # Initialize components
         self._embedding_engine = EmbeddingEngine(
             model_name=self.config.embedding_model,
@@ -345,6 +414,12 @@ class TriTopic:
         self : TriTopic
             Fitted model.
         """
+        # Streaming-mode facade: forward to the streaming backend's first-batch fit.
+        if self._streaming_backend is not None:
+            self._streaming_backend.fit_first_batch(documents, embeddings=embeddings)
+            self._sync_from_streaming()
+            return self
+
         # Input validation
         if not documents:
             raise ValueError("documents must be a non-empty list of strings.")
@@ -1378,7 +1453,55 @@ class TriTopic:
         embeddings : np.ndarray
             Shape (n_docs, embedding_dim).
         """
+        if self._streaming_backend is not None:
+            return self._streaming_backend.encode(documents)
         return self._embedding_engine.encode(documents)
+
+    def add_batch(self, documents: list[str], embeddings: np.ndarray | None = None) -> dict:
+        """Route a new batch of documents through the streaming pipeline.
+
+        Only available when ``config.mode == "streaming"`` and after the first
+        batch has been seeded via :meth:`fit`.
+
+        Returns
+        -------
+        result : dict
+            Routing summary for the batch: assignments, emerged_themes, merged.
+        """
+        if self._streaming_backend is None:
+            raise RuntimeError(
+                "add_batch() requires config.mode='streaming'. "
+                "Set TriTopicConfig.mode='streaming' before constructing TriTopic."
+            )
+        result = self._streaming_backend.add_batch(documents, embeddings=embeddings)
+        self._sync_from_streaming()
+        return result
+
+    def _sync_from_streaming(self) -> None:
+        """Mirror the streaming backend's theme catalog onto this facade.
+
+        Keeps ``topics_``, ``topic_embeddings_``, ``labels_`` (if available)
+        and ``_is_fitted`` in sync so downstream tools that read these
+        attributes work transparently.
+        """
+        b = self._streaming_backend
+        if b is None or not b.themes:
+            return
+        ordered = sorted(b.themes.values(), key=lambda t: t.theme_id)
+        self.topics_ = [
+            TopicInfo(
+                topic_id=t.theme_id,
+                size=t.true_count,
+                keywords=list(t.keywords),
+                keyword_scores=list(t.keyword_scores),
+                representative_docs=[],
+                label=t.label,
+                centroid=t.centroid,
+            )
+            for t in ordered
+        ]
+        self.topic_embeddings_ = np.stack([t.centroid for t in ordered])
+        self._is_fitted = True
 
     def transform(self, documents: list[str], embeddings: np.ndarray | None = None) -> np.ndarray:
         """
@@ -1396,6 +1519,9 @@ class TriTopic:
         labels : np.ndarray
             Topic assignments.
         """
+        if self._streaming_backend is not None:
+            return self._streaming_backend.transform(documents, embeddings=embeddings)
+
         if not self._is_fitted:
             raise ValueError("Model not fitted. Call fit() first.")
 
@@ -1431,6 +1557,9 @@ class TriTopic:
         probabilities : np.ndarray
             Shape (n_docs, n_topics) probability matrix. Rows sum to ~1.0.
         """
+        if self._streaming_backend is not None:
+            return self._streaming_backend.transform_proba(documents, embeddings=embeddings)
+
         if not self._is_fitted:
             raise ValueError("Model not fitted. Call fit() first.")
 
@@ -2530,7 +2659,21 @@ Respond ONLY with this exact JSON, no other text:
         """Save model to disk."""
         import pickle
 
+        # Streaming-mode facade: pickle the streaming backend instead.
+        if self._streaming_backend is not None:
+            state = {
+                "mode": "streaming",
+                "config": self.config,
+                "streaming_state": self._streaming_backend.to_state(),
+            }
+            with open(path, "wb") as f:
+                pickle.dump(state, f)
+            if self.config.verbose:
+                print(f"Streaming model saved to {path}")
+            return
+
         state = {
+            "mode": "single",
             "config": self.config,
             "n_topics": self.n_topics,
             "topics_": self.topics_,
@@ -2568,9 +2711,36 @@ Respond ONLY with this exact JSON, no other text:
             state = pickle.load(f)
 
         config = state["config"]
+
+        # Streaming-mode rehydration: build a streaming facade and restore the backend.
+        if state.get("mode") == "streaming":
+            from tritopic.streaming.router import StreamingTriTopic
+            model = cls(config=config)
+            model._streaming_backend = StreamingTriTopic.from_state(state["streaming_state"], config)
+            model._sync_from_streaming()
+            return model
+
         # Backward compat: ensure new config fields exist for models saved before v2.2
         if not hasattr(config, "language"):
             config.language = "english"
+        # Streaming-mode fields didn't exist pre-2.4; backfill defaults.
+        for _f, _v in [
+            ("mode", "single"),
+            ("assign_threshold_percentile", 25),
+            ("review_threshold_percentile", 5),
+            ("centroid_decay", 0.95),
+            ("reseed_pool_size", 200),
+            ("merge_threshold", 0.60),
+            ("emerging_merge_threshold", 0.85),
+            ("promote_min_batches", 2),
+            ("promote_min_docs", 500),
+            ("promote_min_coherence", 0.65),
+            ("refit_every_n_batches", 10),
+            ("keyword_refresh_every_n_batches", 2),
+            ("keyword_refresh_min_new_docs", 50),
+        ]:
+            if not hasattr(config, _f):
+                setattr(config, _f, _v)
         if not hasattr(config, "soft_assignment_method"):
             config.soft_assignment_method = "centroid"
         if not hasattr(config, "embedding_provider"):

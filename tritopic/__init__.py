@@ -34,6 +34,7 @@ from tritopic.core.embeddings import EmbeddingEngine
 from tritopic.core.keywords import KeywordExtractor
 from tritopic.core.hierarchy import TopicNode, TopicHierarchy
 from tritopic.labeling.llm_labeler import LLMLabeler, SimpleLabeler
+from tritopic.streaming.router import StreamingTriTopic
 from tritopic.visualization.plotter import TopicVisualizer
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     "LLMLabeler",
     "SimpleLabeler",
     "TopicVisualizer",
+    "StreamingTriTopic",
 ]
