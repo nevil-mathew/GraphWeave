@@ -1897,8 +1897,17 @@ class TriTopic:
             if topic is None:
                 continue
 
-            rep_docs = self.get_representative_docs(topic_id, n_docs=labeler.n_docs)
-            doc_texts = [doc for _, doc in rep_docs]
+            # In streaming mode self.documents_ is not populated; pull directly
+            # from the theme's recent_docs ring buffer instead.
+            if self._streaming_backend is not None:
+                streaming_theme = self._streaming_backend.themes.get(topic_id)
+                if streaming_theme and streaming_theme.recent_docs:
+                    doc_texts = list(streaming_theme.recent_docs)[-labeler.n_docs:]
+                else:
+                    doc_texts = []
+            else:
+                rep_docs = self.get_representative_docs(topic_id, n_docs=labeler.n_docs)
+                doc_texts = [doc for _, doc in rep_docs]
 
             label, description = labeler.generate_label(
                 keywords=topic.keywords,
@@ -1921,6 +1930,13 @@ class TriTopic:
             if not collisions:
                 break
             self._resolve_label_collisions(labeler, collisions)
+
+        # Propagate the generated labels back into the streaming theme catalog so
+        # StreamingTriTopic.visualize() picks them up (it reads t.label directly).
+        if self._streaming_backend is not None:
+            for topic in self.topics_:
+                if topic.topic_id in self._streaming_backend.themes:
+                    self._streaming_backend.themes[topic.topic_id].label = topic.label
 
     def _find_label_collisions(self, target_topic_ids: list[int]) -> list[list[int]]:
         """Group topics that share an exact or near-duplicate label.

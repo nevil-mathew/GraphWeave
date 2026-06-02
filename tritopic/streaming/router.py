@@ -637,6 +637,8 @@ class StreamingTriTopic:
 
         used_existing: set[int] = set()
         used_new: set[int] = set()
+        # refit_topic_id -> streaming theme_id, used to rebuild label history.
+        refit_to_stream: dict[int, int] = {}
         for r, c in zip(row_ind, col_ind):
             if r >= n_new or c >= n_exist:
                 continue
@@ -644,6 +646,7 @@ class StreamingTriTopic:
                 continue
             tid = existing_ids[c]
             self._reassign_theme_from_refit(tid, new_topics[r], refit, r)
+            refit_to_stream[new_topics[r].topic_id] = tid
             used_existing.add(c)
             used_new.add(r)
 
@@ -651,8 +654,16 @@ class StreamingTriTopic:
         for r, t in enumerate(new_topics):
             if r in used_new:
                 continue
-            self._register_theme_from_refit(t, refit, r)
+            new_tid = self._register_theme_from_refit(t, refit, r)
+            refit_to_stream[t.topic_id] = new_tid
         # Unmatched existing themes are left alone (counts already capture them).
+
+        # Rebuild historical label assignments from the refit's global clustering.
+        # This replaces noisy per-batch threshold assignments with the cleaner
+        # global Leiden partition, which is what the user sees in visualize().
+        self.all_labels_history = [
+            refit_to_stream.get(int(l), -1) for l in refit.labels_
+        ]
 
         if self.config.verbose:
             print(
@@ -695,7 +706,7 @@ class StreamingTriTopic:
         topic_info: Any,
         refit_model: "TriTopic",
         topic_idx_in_refit: int,
-    ) -> None:
+    ) -> int:
         labels = refit_model.labels_
         emb = refit_model.original_embeddings_
         mask = labels == topic_info.topic_id
@@ -729,6 +740,7 @@ class StreamingTriTopic:
             recent_docs=ring,
             docs_since_keyword_refresh=0,
         )
+        return tid
 
     # ------------------------------------------------------------------ #
     # Persistence helpers (used by TriTopic.save / TriTopic.load)
