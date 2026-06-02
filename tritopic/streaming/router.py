@@ -115,6 +115,7 @@ class StreamingTriTopic:
         self.unassigned_pool: list[PoolDoc] = []
         self.all_docs_history: list[str] = []
         self.all_embs_history: np.ndarray | None = None
+        self.all_labels_history: list[int] = []
         self.batch_counter: int = 0
         self._next_theme_id: int = 0
 
@@ -181,6 +182,7 @@ class StreamingTriTopic:
         labels = self.base.labels_
         topics = [t for t in self.base.topics_ if t.topic_id != -1]
 
+        base_to_stream: dict[int, int] = {}  # base topic_id -> streaming theme_id
         for t in topics:
             mask = labels == t.topic_id
             member_embs = emb[mask]
@@ -192,6 +194,7 @@ class StreamingTriTopic:
             review_thr = float(np.percentile(sims, self.config.review_threshold_percentile))
 
             theme_id = self._allocate_theme_id()
+            base_to_stream[t.topic_id] = theme_id
             member_docs = [documents[i] for i in np.flatnonzero(mask)]
             ring: deque = deque(member_docs[-2000:], maxlen=2000)
 
@@ -214,6 +217,9 @@ class StreamingTriTopic:
                 docs_since_keyword_refresh=0,
             )
             self.themes[theme_id] = theme
+
+        # Map batch-1 base labels to streaming theme IDs for visualization history.
+        self.all_labels_history = [base_to_stream.get(int(l), -1) for l in labels]
 
         # Route batch-1 outliers into the pool so they can seed emerging clusters.
         for i in np.flatnonzero(labels == -1):
@@ -294,12 +300,16 @@ class StreamingTriTopic:
             theme.historical_max = max(theme.historical_max, theme.true_count)
             theme.batches_seen.add(batch_id)
 
-        # Accumulate raw history for the periodic refit.
+        # Accumulate raw history for the periodic refit and visualization.
         self.all_docs_history.extend(documents)
         self.all_embs_history = (
             embs.copy()
             if self.all_embs_history is None
             else np.vstack([self.all_embs_history, embs])
+        )
+        self.all_labels_history.extend(
+            a["theme_id"] if a["theme_id"] is not None else -1
+            for a in assignments
         )
 
         # Reseed if pool is full.
@@ -364,6 +374,47 @@ class StreamingTriTopic:
             }
             for tid, t in sorted(self.themes.items())
         }
+
+    def visualize(
+        self,
+        method: str = "umap",
+        show_outliers: bool = True,
+        interactive: bool = True,
+        **kwargs,
+    ):
+        """Visualize all accumulated docs coloured by their streaming theme."""
+        from tritopic.visualization.plotter import TopicVisualizer
+        from tritopic.core.model import TopicInfo
+
+        if not self.themes:
+            raise ValueError("No themes. Call fit() first.")
+        if self.all_embs_history is None:
+            raise ValueError("No embedding history. Call fit() first.")
+
+        topics = [
+            TopicInfo(
+                topic_id=t.theme_id,
+                size=t.true_count,
+                keywords=list(t.keywords),
+                keyword_scores=list(t.keyword_scores),
+                representative_docs=[],
+                label=t.label,
+                centroid=t.centroid,
+            )
+            for t in sorted(self.themes.values(), key=lambda x: x.theme_id)
+        ]
+
+        labels = np.array(self.all_labels_history, dtype=int)
+        visualizer = TopicVisualizer(method=method)
+        return visualizer.plot_documents(
+            embeddings=self.all_embs_history,
+            labels=labels,
+            documents=self.all_docs_history,
+            topics=topics,
+            show_outliers=show_outliers,
+            interactive=interactive,
+            **kwargs,
+        )
 
     # ------------------------------------------------------------------ #
     # Internals
@@ -690,6 +741,7 @@ class StreamingTriTopic:
             "unassigned_pool": list(self.unassigned_pool),
             "all_docs_history": list(self.all_docs_history),
             "all_embs_history": self.all_embs_history,
+            "all_labels_history": list(self.all_labels_history),
             "batch_counter": self.batch_counter,
             "next_theme_id": self._next_theme_id,
             "base_state": _save_base_to_dict(self.base) if self.base is not None else None,
@@ -703,6 +755,7 @@ class StreamingTriTopic:
         inst.unassigned_pool = list(state["unassigned_pool"])
         inst.all_docs_history = list(state["all_docs_history"])
         inst.all_embs_history = state["all_embs_history"]
+        inst.all_labels_history = list(state.get("all_labels_history", []))
         inst.batch_counter = int(state["batch_counter"])
         inst._next_theme_id = int(state["next_theme_id"])
         if state["base_state"] is not None:

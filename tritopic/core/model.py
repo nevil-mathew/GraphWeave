@@ -2409,12 +2409,20 @@ Respond ONLY with this exact JSON, no other text:
             Interactive visualization.
         """
         from tritopic.visualization.plotter import TopicVisualizer
-        
+
+        if self._streaming_backend is not None:
+            return self._streaming_backend.visualize(
+                method=method,
+                show_outliers=show_outliers,
+                interactive=interactive,
+                **kwargs,
+            )
+
         if not self._is_fitted:
             raise ValueError("Model not fitted. Call fit() first.")
-        
+
         visualizer = TopicVisualizer(method=method)
-        
+
         return visualizer.plot_documents(
             embeddings=self.embeddings_,
             labels=self.labels_,
@@ -2449,6 +2457,14 @@ Respond ONLY with this exact JSON, no other text:
             Interactive 3-D visualization.
         """
         from tritopic.visualization.plotter import TopicVisualizer
+
+        if self._streaming_backend is not None:
+            return self._streaming_backend.visualize(
+                method=method,
+                show_outliers=show_outliers,
+                interactive=True,
+                **kwargs,
+            )
 
         if not self._is_fitted:
             raise ValueError("Model not fitted. Call fit() first.")
