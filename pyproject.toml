@@ -99,6 +99,8 @@ full = [
     "pacmap>=0.6.0",
     "datamapplot>=0.1.0",
     "hnswlib>=0.7.0",
+    "torch>=2.0.0",
+    "faiss-cpu>=1.7.4",
 ]
 # GPU acceleration extras
 # -------------------------

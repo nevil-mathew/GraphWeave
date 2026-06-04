@@ -97,7 +97,7 @@ pip install tritopic
 # With LLM labeling support (Claude / GPT-4 / Gemini)
 pip install tritopic[llm]
 
-# Full installation (all optional features)
+# Full installation (all optional features, including GPU support)
 pip install tritopic[full]
 ```
 
