@@ -769,7 +769,7 @@ class TriTopic:
     def _compute_centroid_probabilities(self) -> None:
         """Centroid-based soft assignment: softmax over cosine similarity to topic centroids."""
         base_emb = self.original_embeddings_ if self.original_embeddings_ is not None else self.embeddings_
-        if self.topic_embeddings_ is None or base_emb is None:
+        if self.topic_embeddings_ is None or len(self.topic_embeddings_) == 0 or base_emb is None:
             return
 
         from sklearn.metrics.pairwise import cosine_similarity
