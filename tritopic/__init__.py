@@ -35,6 +35,7 @@ from tritopic.core.keywords import KeywordExtractor
 from tritopic.core.hierarchy import TopicNode, TopicHierarchy
 from tritopic.labeling.llm_labeler import LLMLabeler, SimpleLabeler
 from tritopic.visualization.plotter import TopicVisualizer
+from tritopic.cumulative.cumulative import CumulativeTriTopic, CumulativeConfig
 
 __all__ = [
     "TriTopic",
@@ -50,4 +51,6 @@ __all__ = [
     "LLMLabeler",
     "SimpleLabeler",
     "TopicVisualizer",
+    "CumulativeTriTopic",
+    "CumulativeConfig",
 ]

@@ -107,6 +107,11 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
+# Real-world integration tests: 20 Newsgroups + sentence-transformers.
+# Embeddings are cached after the first run so subsequent runs are fast.
+integration = [
+    "sentence-transformers>=2.2.0",
+]
 benchmark = [
     "bertopic>=0.16.0",
     "datasets>=2.14.0",
@@ -142,3 +147,6 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+markers = [
+    "slow: tests that take >30 s (6k+ docs, HNSW path, sentence-transformers)",
+]

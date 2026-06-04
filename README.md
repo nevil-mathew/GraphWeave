@@ -17,6 +17,7 @@ A state-of-the-art topic modeling library that fuses semantic embeddings, lexica
 
 - [Why TriTopic?](#why-tritopic)
 - [Key Features](#key-features)
+- [Cumulative / Batch-wise Clustering](tritopic/cumulative/README.md)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [The Pipeline](#the-pipeline)
@@ -76,6 +77,13 @@ On top of this multi-view graph, TriTopic applies **consensus Leiden clustering*
 | **TensorFlow Projector export** | Export embeddings and topic metadata for [projector.tensorflow.org](https://projector.tensorflow.org) with one call |
 | **scikit-learn compatible** | Familiar `fit()` / `transform()` / `fit_transform()` API |
 | **Save and load** | Full model persistence including fitted reducer, probabilities, and graph state |
+| **Cumulative / batch-wise clustering** | Cluster documents that arrive in batches and accumulate over time, with drift-triggered reclustering, stable topic IDs, and a high-level "bigger picture" across all data — see [`tritopic/cumulative/README.md`](tritopic/cumulative/README.md) |
+
+> **Streaming your data in batches?** TriTopic also ships a separate cumulative /
+> batch-wise workflow (`tritopic.cumulative.CumulativeTriTopic`) that layers on top of
+> the full-batch pipeline below **without changing it**. See the dedicated guide:
+> [**Cumulative / Batch-wise Clustering →**](tritopic/cumulative/README.md)
+> (quality report: [`LEARNING_GUIDE/CUMULATIVE_QUALITY_REPORT.md`](LEARNING_GUIDE/CUMULATIVE_QUALITY_REPORT.md)).
 
 ---
 

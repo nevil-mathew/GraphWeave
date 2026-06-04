@@ -259,3 +259,67 @@ def compute_downstream_score(
     else:
         # Clustering ARI
         return float(adjusted_rand_score(labels, y_true))
+
+
+def compute_ari(labels_a: np.ndarray, labels_b: np.ndarray) -> float:
+    """Adjusted Rand Index between two label assignments.
+
+    Permutation-invariant, so the two assignments need not share topic IDs.
+    Used to compare cumulative clustering against the full-batch baseline (or
+    against ground truth).
+
+    Parameters
+    ----------
+    labels_a, labels_b : np.ndarray
+        Cluster assignments over the *same* documents (equal length).
+
+    Returns
+    -------
+    ari : float
+        Adjusted Rand Index in [-1, 1] (1.0 = identical clustering).
+    """
+    from sklearn.metrics import adjusted_rand_score
+
+    return float(adjusted_rand_score(labels_a, labels_b))
+
+
+def compute_nmi(labels_a: np.ndarray, labels_b: np.ndarray) -> float:
+    """Normalized Mutual Information between two label assignments.
+
+    Permutation-invariant. Complements ARI when comparing partitions with
+    differing topic counts.
+
+    Parameters
+    ----------
+    labels_a, labels_b : np.ndarray
+        Cluster assignments over the *same* documents (equal length).
+
+    Returns
+    -------
+    nmi : float
+        Normalized Mutual Information in [0, 1] (1.0 = identical clustering).
+    """
+    from sklearn.metrics import normalized_mutual_info_score
+
+    return float(normalized_mutual_info_score(labels_a, labels_b))
+
+
+def keyword_jaccard(keywords_a: list[str], keywords_b: list[str]) -> float:
+    """Jaccard overlap between two keyword lists (case-insensitive).
+
+    Used to measure how stable a topic's keywords are across two models
+    (e.g. cumulative vs full-batch) after the topics have been matched.
+
+    Returns
+    -------
+    overlap : float
+        |A ∩ B| / |A ∪ B| in [0, 1]. Empty-vs-empty returns 1.0.
+    """
+    set_a = {kw.lower() for kw in keywords_a}
+    set_b = {kw.lower() for kw in keywords_b}
+    if not set_a and not set_b:
+        return 1.0
+    union = set_a | set_b
+    if not union:
+        return 1.0
+    return float(len(set_a & set_b) / len(union))
