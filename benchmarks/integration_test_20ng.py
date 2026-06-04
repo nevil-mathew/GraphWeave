@@ -116,7 +116,7 @@ def make_batches(
     rng: np.random.Generator,
 ) -> tuple[list[list[str]], list[np.ndarray], list[np.ndarray]]:
     """
-    Build 6 batches.
+    Build 6 batches with no document appearing more than once.
 
     Batches 1-4: categories 0-14 only  (~3 k docs each)
     Batches 5-6: all categories (0-19) — 5 new categories appear, driving drift
@@ -127,27 +127,26 @@ def make_batches(
     est_shuf  = rng.permutation(established)
     emg_shuf  = rng.permutation(emerging)
 
-    # Split established into 4 roughly equal chunks (~3.5 k each)
-    est_chunks = np.array_split(est_shuf, 4)
-    # Split emerging into 2 chunks and pad each with some established docs
-    # so the emerging fraction is prominent (~40 %) in batches 5-6.
+    # Reserve 800 established docs exclusively for padding batches 5-6 (~40 % emerging).
+    # These are drawn before splitting the rest into 4 chunks, so no doc appears twice.
+    est_reserved = est_shuf[:800]
+    est_remaining = est_shuf[800:]
+
+    # Split remaining established into 4 roughly equal chunks for batches 1-4.
+    est_chunks = np.array_split(est_remaining, 4)
+
+    # Split emerging into 2 halves for batches 5-6.
     emg_half   = len(emg_shuf) // 2
     emg_a, emg_b = emg_shuf[:emg_half], emg_shuf[emg_half:]
-    extra_a    = est_chunks[3][:500]   # a few established docs alongside emerging
-    extra_b    = est_chunks[3][500:]
 
     raw_batches = [
         est_chunks[0],
         est_chunks[1],
         est_chunks[2],
-        np.concatenate([est_chunks[3], extra_a]),  # slightly larger batch 4
-        np.concatenate([emg_a, extra_a]),           # batch 5: ~40 % emerging
-        np.concatenate([emg_b, extra_b]),           # batch 6: ~40 % emerging
+        est_chunks[3],
+        np.concatenate([emg_a, est_reserved[:400]]),   # batch 5: ~40 % emerging
+        np.concatenate([emg_b, est_reserved[400:]]),   # batch 6: ~40 % emerging
     ]
-    # Remove duplicates that snuck in from the double-use of est_chunks[3]
-    raw_batches[3] = est_chunks[3]
-    raw_batches[4] = np.concatenate([emg_a, est_chunks[3][:400]])
-    raw_batches[5] = np.concatenate([emg_b, est_chunks[3][400:800]])
 
     batch_docs  = [[documents[i] for i in idx] for idx in raw_batches]
     batch_emb   = [embeddings[idx]             for idx in raw_batches]
@@ -175,7 +174,6 @@ def scenario_drift(
     batch_docs: list[list[str]],
     batch_emb: list[np.ndarray],
     batch_lbl: list[np.ndarray],
-    all_labels: np.ndarray,
 ) -> CumulativeTriTopic:
     hr("SCENARIO A — Drift detection on real 20 Newsgroups text")
     print("Batches 1-4: categories 0-14 only.  "
@@ -190,8 +188,8 @@ def scenario_drift(
     model = CumulativeTriTopic(cfg)
 
     print(f"  {'batch':>5} | {'docs':>6} | {'cumul':>6} | {'novelty':>7} | "
-          f"{'reclust':>7} | {'g-topics':>8} | {'ARI/truth':>9} | {'RAM MB':>6}")
-    print("  " + "-" * 74)
+          f"{'reclust':>7} | {'g-topics':>8} | {'ARI/truth':>9} | {'RAM MB':>6} | {'wall_s':>6}")
+    print("  " + "-" * 83)
 
     for i, (docs, emb, lbl) in enumerate(zip(batch_docs, batch_emb, batch_lbl)):
         t0 = time.perf_counter()
@@ -205,7 +203,7 @@ def scenario_drift(
         nv = f"{r.novelty:.2f}" if r.novelty is not None else "  -  "
         print(f"  {i+1:>5} | {len(docs):>6,} | {r.n_total_docs:>6,} | {nv:>7} | "
               f"{'YES' if r.reclustered else 'no':>7} | {model.n_global_topics:>8} | "
-              f"{ari_truth:>9.3f} | {rss_mb():>6.0f}")
+              f"{ari_truth:>9.3f} | {rss_mb():>6.0f} | {elapsed:>6.1f}")
 
     print()
     # Final metrics vs the full-batch baseline
@@ -338,7 +336,7 @@ def main() -> None:
     print(f"  New categories in batches 5-6: "
           f"{sorted(set(np.concatenate(batch_lbl[4:]).tolist()) - set(np.concatenate(batch_lbl[:4]).tolist()))}")
 
-    model = scenario_drift(batch_docs, batch_emb, batch_lbl, labels)
+    model = scenario_drift(batch_docs, batch_emb, batch_lbl)
     scenario_head_to_head(batch_docs, batch_emb, batch_lbl)
     scenario_bigger_picture(model)
     footer(time.perf_counter() - t_start)
