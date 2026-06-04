@@ -25,6 +25,7 @@ phase. This POC keeps everything in memory.
 from __future__ import annotations
 
 import copy
+import warnings
 from dataclasses import dataclass
 from typing import Literal
 
@@ -346,6 +347,416 @@ class CumulativeTriTopic:
         )
         return metrics
 
+    # ------------------------------------------------------------------ #
+    # Visualization
+    # ------------------------------------------------------------------ #
+
+    def visualize(
+        self,
+        method: Literal["umap", "pacmap"] = "umap",
+        color_by: Literal["topic", "custom"] = "topic",
+        custom_labels: list[str] | None = None,
+        show_outliers: bool = True,
+        interactive: bool = True,
+        **kwargs,
+    ):
+        """Visualize all accumulated documents in 2-D, coloured by global topic ID.
+
+        Uses every document ever added (not just the working set of the last
+        recluster), so the plot is directly comparable to a full-batch
+        :meth:`TriTopic.visualize` run on the same corpus.
+
+        Parameters
+        ----------
+        method : {"umap", "pacmap"}
+            Dimensionality reduction method.
+        color_by : {"topic", "custom"}
+            Colouring strategy.
+        custom_labels : list[str], optional
+            One label per accumulated document when ``color_by="custom"``.
+        show_outliers : bool
+            Whether to show outlier documents (global topic ID == -1).
+        interactive : bool
+            If True, returns an interactive Plotly figure.
+        """
+        from tritopic.visualization.plotter import TopicVisualizer
+
+        self._require_fitted()
+        visualizer = TopicVisualizer(method=method)
+        return visualizer.plot_documents(
+            embeddings=self._embeddings,
+            labels=self.labels_,
+            documents=self._documents,
+            topics=self._make_global_topics(),
+            show_outliers=show_outliers,
+            interactive=interactive,
+            **kwargs,
+        )
+
+    def visualize_3d(
+        self,
+        method: Literal["umap", "pacmap"] = "umap",
+        show_outliers: bool = True,
+        **kwargs,
+    ):
+        """Visualize all accumulated documents in 3-D, coloured by global topic ID.
+
+        Parameters
+        ----------
+        method : {"umap", "pacmap"}
+            Dimensionality reduction method.
+        show_outliers : bool
+            Whether to show outlier documents.
+        """
+        from tritopic.visualization.plotter import TopicVisualizer
+
+        self._require_fitted()
+        visualizer = TopicVisualizer(method=method)
+        return visualizer.plot_documents_3d(
+            embeddings=self._embeddings,
+            labels=self.labels_,
+            documents=self._documents,
+            topics=self._make_global_topics(),
+            show_outliers=show_outliers,
+            **kwargs,
+        )
+
+    def visualize_topics(self, **kwargs):
+        """Heatmap / bar chart of the current epoch's topics.
+
+        Note: for ``batch_merge`` strategy this reflects the last batch's topics
+        only, not the full global topic set.
+        """
+        from tritopic.visualization.plotter import TopicVisualizer
+
+        self._require_fitted()
+        if self.config.strategy == "batch_merge":
+            warnings.warn(
+                "visualize_topics() with strategy='batch_merge' shows the last "
+                "batch's topics only, not the full global topic set.",
+                UserWarning,
+                stacklevel=2,
+            )
+        visualizer = TopicVisualizer()
+        return visualizer.plot_topics(topics=self._make_global_topics(), **kwargs)
+
+    def visualize_hierarchy(self, **kwargs):
+        """Dendrogram of topic similarity using the current epoch's centroids.
+
+        Note: for ``batch_merge`` strategy this reflects the last batch's topics
+        only, not the full global topic set.
+        """
+        from tritopic.visualization.plotter import TopicVisualizer
+
+        self._require_fitted()
+        if self.config.strategy == "batch_merge":
+            warnings.warn(
+                "visualize_hierarchy() with strategy='batch_merge' shows the last "
+                "batch's topics only, not the full global topic set.",
+                UserWarning,
+                stacklevel=2,
+            )
+        visualizer = TopicVisualizer()
+        return visualizer.plot_hierarchy(
+            topic_embeddings=self.model_.topic_embeddings_,
+            topics=self._make_global_topics(),
+            **kwargs,
+        )
+
+    def visualize_topic_map(
+        self,
+        method: Literal["mds", "pca", "umap"] = "mds",
+        **kwargs,
+    ):
+        """Intertopic distance map — 2-D projection of topic centroids.
+
+        Bubbles sized by topic count; layout driven by centroid cosine distance.
+
+        Note: for ``batch_merge`` strategy this reflects the last batch's topics
+        only, not the full global topic set.
+
+        Parameters
+        ----------
+        method : {"mds", "pca", "umap"}
+            Projection used on the centroid matrix.
+        """
+        from tritopic.visualization.plotter import plot_intertopic_distance_map
+
+        self._require_fitted()
+        if self.model_.topic_embeddings_ is None:
+            raise ValueError("Topic centroids are not available.")
+        if self.config.strategy == "batch_merge":
+            warnings.warn(
+                "visualize_topic_map() with strategy='batch_merge' shows the last "
+                "batch's topics only, not the full global topic set.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return plot_intertopic_distance_map(
+            topic_embeddings=self.model_.topic_embeddings_,
+            topics=self._make_global_topics(),
+            method=method,
+            **kwargs,
+        )
+
+    def visualize_overlap(self, threshold: float = 0.1, **kwargs):
+        """Topic co-occurrence heatmap based on soft assignments in the working set.
+
+        Note: soft assignment probabilities are computed over the working set of
+        the last recluster, not the full accumulator.
+        """
+        self._require_fitted()
+        return self.model_.visualize_overlap(threshold=threshold, **kwargs)
+
+    def visualize_hierarchy_tree(self, **kwargs):
+        """Tree diagram of the topic hierarchy.
+
+        Requires :meth:`bigger_picture` (or ``model_.build_hierarchy()``) to have
+        been called first.
+        """
+        self._require_fitted()
+        return self.model_.visualize_hierarchy_tree(**kwargs)
+
+    # ------------------------------------------------------------------ #
+    # Topic info
+    # ------------------------------------------------------------------ #
+
+    def get_topic(self, global_topic_id: int):
+        """Return :class:`TopicInfo` for a global topic ID.
+
+        Parameters
+        ----------
+        global_topic_id : int
+            The stable global topic ID (as seen in :attr:`labels_` and
+            ``get_topic_info()["GlobalTopic"]``).
+        """
+        self._require_fitted()
+        global_to_local = {v: k for k, v in self._local_id_to_global.items()}
+        local_id = global_to_local.get(global_topic_id)
+        if local_id is None:
+            raise ValueError(
+                f"Global topic {global_topic_id} is not in the current epoch's model. "
+                "It may belong to a past epoch that has been superseded."
+            )
+        return self.model_.get_topic(local_id)
+
+    def get_representative_docs(
+        self, global_topic_id: int, n_docs: int = 5
+    ) -> list[tuple[int, str]]:
+        """Representative documents for a global topic ID, drawn from all accumulated docs.
+
+        Parameters
+        ----------
+        global_topic_id : int
+            Stable global topic ID.
+        n_docs : int
+            Number of documents to return.
+
+        Returns
+        -------
+        list[tuple[int, str]]
+            ``(accumulator_index, document_text)`` pairs, closest to the topic centroid.
+        """
+        self._require_fitted()
+        mask = self.labels_ == global_topic_id
+        indices = np.where(mask)[0]
+        if len(indices) == 0:
+            raise ValueError(f"No documents found for global topic {global_topic_id}.")
+
+        topic_embeddings = self._embeddings[mask]
+        centroid = topic_embeddings.mean(axis=0)
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        sims = cosine_similarity(centroid.reshape(1, -1), topic_embeddings)[0]
+        top_local = np.argsort(sims)[::-1][: min(n_docs, len(indices))]
+        top_global = indices[top_local]
+        return [(int(idx), self._documents[idx]) for idx in top_global]
+
+    def get_document_topics(
+        self, doc_idx: int, top_n: int = 3, method=None
+    ) -> list[tuple[int, float]]:
+        """Top-N global topic IDs with probabilities for one document.
+
+        Parameters
+        ----------
+        doc_idx : int
+            Index into the **working set** of the last recluster (i.e.
+            ``model_.documents_``), *not* the full accumulator. Use
+            :attr:`model_` directly to inspect which documents are in scope.
+        top_n : int
+            Number of top topics to return.
+        method : str, optional
+            ``"centroid"`` or ``"graph"``. Defaults to the model config.
+
+        Returns
+        -------
+        list[tuple[int, float]]
+            ``(global_topic_id, probability)`` pairs, sorted descending.
+        """
+        self._require_fitted()
+        local_results = self.model_.get_document_topics(doc_idx, top_n=top_n, method=method)
+        return [
+            (self._local_id_to_global.get(tid, tid), prob)
+            for tid, prob in local_results
+        ]
+
+    def topic_overlap_matrix(self, threshold: float = 0.1) -> pd.DataFrame:
+        """Topic co-occurrence matrix from soft assignments in the working set.
+
+        Parameters
+        ----------
+        threshold : float
+            Minimum probability for a topic to count as active.
+
+        Returns
+        -------
+        pd.DataFrame
+            Symmetric ``(n_topics, n_topics)`` DataFrame labelled by global topic ID.
+        """
+        self._require_fitted()
+        df = self.model_.topic_overlap_matrix(threshold=threshold)
+        # Relabel columns/index from local to global IDs.
+        rename = {
+            f"Topic {local_id}": f"Topic {self._local_id_to_global.get(local_id, local_id)}"
+            for local_id in self._local_id_to_global
+        }
+        return df.rename(index=rename, columns=rename)
+
+    # ------------------------------------------------------------------ #
+    # Labeling
+    # ------------------------------------------------------------------ #
+
+    def generate_labels(self, labeler, topics=None, dedup: bool = True, dedup_passes: int = 1):
+        """Generate LLM labels for the current epoch's topics (delegates to TriTopic).
+
+        Parameters
+        ----------
+        labeler : LLMLabeler
+            Configured LLM labeler instance.
+        topics : list[int], optional
+            Local topic IDs to label. ``None`` labels all topics.
+        dedup : bool
+            Whether to de-duplicate colliding labels.
+        dedup_passes : int
+            Number of de-duplication passes.
+        """
+        self._require_fitted()
+        return self.model_.generate_labels(
+            labeler, topics=topics, dedup=dedup, dedup_passes=dedup_passes
+        )
+
+    def generate_report_themes(self, labeler, n_themes=None, n_docs_per_theme: int = 12):
+        """Synthesize high-level meta-themes from topic labels (delegates to TriTopic).
+
+        Parameters
+        ----------
+        labeler : LLMLabeler
+            Configured LLM labeler instance.
+        n_themes : int, optional
+            Target number of meta-themes. ``None`` lets the LLM decide.
+        n_docs_per_theme : int
+            Representative documents per theme fed to the LLM.
+        """
+        self._require_fitted()
+        return self.model_.generate_report_themes(
+            labeler, n_themes=n_themes, n_docs_per_theme=n_docs_per_theme
+        )
+
+    def regenerate_theme(self, labeler, theme_id: int, new_topic_ids=None, n_docs: int = 12):
+        """Re-generate one meta-theme's narrative (delegates to TriTopic).
+
+        Requires :meth:`generate_report_themes` to have been called first.
+
+        Parameters
+        ----------
+        labeler : LLMLabeler
+            Configured LLM labeler instance.
+        theme_id : int
+            1-indexed theme ID to regenerate.
+        new_topic_ids : list[int], optional
+            Replace the theme's topic membership before regenerating.
+        n_docs : int
+            Representative documents fed to the LLM.
+        """
+        self._require_fitted()
+        return self.model_.regenerate_theme(
+            labeler, theme_id, new_topic_ids=new_topic_ids, n_docs=n_docs
+        )
+
+    # ------------------------------------------------------------------ #
+    # Post-fit operations
+    # ------------------------------------------------------------------ #
+
+    def reduce_outliers(self, strategy: str = "embeddings", threshold=None) -> "CumulativeTriTopic":
+        """Reassign outlier documents in the working set to the nearest topic.
+
+        Mutates the internal TriTopic model in-place. ``self.labels_`` and the
+        global topic registry become stale until the next :meth:`recluster`.
+
+        Parameters
+        ----------
+        strategy : str
+            ``"embeddings"`` or ``"neighbors"`` — passed through to TriTopic.
+        threshold : float, optional
+            Distance threshold passed through to TriTopic.
+        """
+        self._require_fitted()
+        self.model_.reduce_outliers(strategy=strategy, threshold=threshold)
+        warnings.warn(
+            "reduce_outliers() mutated the internal TriTopic model. "
+            "CumulativeTriTopic.labels_ and the global topic registry are now stale. "
+            "Call recluster() to re-synchronize.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return self
+
+    def reduce_topics(self, n_topics: int) -> "CumulativeTriTopic":
+        """Merge working-set topics until ``n_topics`` remain.
+
+        Mutates the internal TriTopic model in-place. ``self.labels_``,
+        ``self._local_id_to_global``, and the global topic registry become stale
+        until the next :meth:`recluster`.
+
+        Parameters
+        ----------
+        n_topics : int
+            Target number of topics.
+        """
+        self._require_fitted()
+        self.model_.reduce_topics(n_topics)
+        warnings.warn(
+            "reduce_topics() mutated the internal TriTopic model. "
+            "CumulativeTriTopic.labels_ and the global topic registry are now stale. "
+            "Call recluster() to re-synchronize.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return self
+
+    def merge_topics(self, topics_to_merge: list[int]) -> "CumulativeTriTopic":
+        """Merge the specified local topic IDs into one.
+
+        Mutates the internal TriTopic model in-place. ``self.labels_``,
+        ``self._local_id_to_global``, and the global topic registry become stale
+        until the next :meth:`recluster`.
+
+        Parameters
+        ----------
+        topics_to_merge : list[int]
+            Local topic IDs to merge (the largest ID is kept).
+        """
+        self._require_fitted()
+        self.model_.merge_topics(topics_to_merge)
+        warnings.warn(
+            "merge_topics() mutated the internal TriTopic model. "
+            "CumulativeTriTopic.labels_ and the global topic registry are now stale. "
+            "Call recluster() to re-synchronize.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return self
+
     @property
     def epoch(self) -> int:
         return self._epoch
@@ -491,6 +902,20 @@ class CumulativeTriTopic:
         self._registry_ids = ids
         self._registry_centroids = np.array([bank[g][0] for g in ids])
         self._registry_counts = np.array([bank[g][1] for g in ids], dtype=float)
+
+    def _make_global_topics(self) -> list:
+        """Copy model_.topics_ with topic_id remapped to stable global IDs.
+
+        Needed so that visualizers that colour-match on topic_id work correctly
+        when we pass self.labels_ (global IDs) alongside the topic list.
+        """
+        remapped = []
+        for t in self.model_.topics_:
+            t_copy = copy.copy(t)
+            if t.topic_id != -1:
+                t_copy.topic_id = self._local_id_to_global.get(t.topic_id, t.topic_id)
+            remapped.append(t_copy)
+        return remapped
 
     def _require_fitted(self) -> None:
         if self.model_ is None:
