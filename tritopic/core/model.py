@@ -99,7 +99,11 @@ class TriTopicConfig:
     resolution_range: tuple[float, float] | None = None
     n_consensus_runs: int = 10
     min_cluster_size: int = 5
-    
+    # When set, overrides min_cluster_size with max(floor(fraction × n_docs), min_cluster_size).
+    # Recommended: 0.005 (0.5% of corpus). Scales automatically with batch size, so cumulative
+    # models don't need different constants for 10K-doc batches vs 120K-doc full fits.
+    min_cluster_fraction: float | None = None
+
     # Iterative refinement
     use_iterative_refinement: bool = True
     max_iterations: int = 5
@@ -321,7 +325,22 @@ class TriTopic:
         self._is_fitted: bool = False
         self._iteration_history: list[dict] = []
         self._dim_reducer: Any | None = None
-        
+
+    def _effective_min_cluster_size(self, n_docs: int) -> int:
+        """Return the min_cluster_size to use for a corpus of n_docs documents.
+
+        If ``min_cluster_fraction`` is set, scales with corpus size so the
+        threshold is proportional rather than absolute — critical for cumulative
+        models whose fitting corpus grows from one batch to the full accumulator.
+        The absolute ``min_cluster_size`` acts as the floor.
+        """
+        if self.config.min_cluster_fraction is not None:
+            return max(
+                self.config.min_cluster_size,
+                int(self.config.min_cluster_fraction * n_docs),
+            )
+        return self.config.min_cluster_size
+
     def fit(
         self,
         documents: list[str],
@@ -487,7 +506,7 @@ class TriTopic:
         with step_timer("leiden", verbose=self.config.verbose):
             self.labels_ = self._clusterer.fit_predict(
                 self.graph_,
-                min_cluster_size=self.config.min_cluster_size,
+                min_cluster_size=self._effective_min_cluster_size(len(self.embeddings_)),
             )
     
     def _fit_iterative(
@@ -541,7 +560,7 @@ class TriTopic:
             with step_timer("leiden", verbose=self.config.verbose, indent=9):
                 self.labels_ = self._clusterer.fit_predict(
                     self.graph_,
-                    min_cluster_size=self.config.min_cluster_size,
+                    min_cluster_size=self._effective_min_cluster_size(len(self.embeddings_)),
                     compute_stability=False,
                 )
 
@@ -652,7 +671,7 @@ class TriTopic:
         self.graph_ = graph
         self.labels_ = self._clusterer.fit_predict(
             graph,
-            min_cluster_size=self.config.min_cluster_size,
+            min_cluster_size=self._effective_min_cluster_size(len(self.embeddings_)),
             resolution=best_res,
         )
 
@@ -697,6 +716,12 @@ class TriTopic:
         blend_factor : float
             Base blend strength (0 = no change, 1 = replace).
         """
+        try:
+            from tritopic.utils.gpu import gpu_refine_embeddings
+            return gpu_refine_embeddings(original_embeddings, labels, blend_factor)
+        except Exception:
+            pass
+
         refined = original_embeddings.copy()
         unique_labels = np.unique(labels[labels != -1])
 
@@ -738,7 +763,12 @@ class TriTopic:
                   f"({self.config.dim_reduction_method.upper()})...")
 
         if self.config.dim_reduction_method == "umap":
-            from umap import UMAP
+            try:
+                from cuml.manifold import UMAP
+                if self.config.verbose:
+                    print("   > Using cuML UMAP (GPU)")
+            except ImportError:
+                from umap import UMAP
             self._dim_reducer = UMAP(
                 n_components=self.config.reduced_dims,
                 n_neighbors=self.config.umap_n_neighbors,
@@ -772,10 +802,10 @@ class TriTopic:
         if self.topic_embeddings_ is None or len(self.topic_embeddings_) == 0 or base_emb is None:
             return
 
-        from sklearn.metrics.pairwise import cosine_similarity
         from scipy.special import softmax
+        from tritopic.utils.gpu import gpu_cosine_similarity
 
-        sim_matrix = cosine_similarity(base_emb, self.topic_embeddings_)
+        sim_matrix = gpu_cosine_similarity(base_emb, self.topic_embeddings_)
         # Temperature scaling: higher T -> sharper peaks
         self.probabilities_ = softmax(sim_matrix * self.config.softmax_temperature, axis=1)
 
@@ -1265,7 +1295,7 @@ class TriTopic:
         )
 
         sub_labels = sub_clusterer.fit_predict(
-            subgraph, min_cluster_size=max(2, self.config.min_cluster_size // 2),
+            subgraph, min_cluster_size=max(2, self._effective_min_cluster_size(subgraph.vcount()) // 2),
             resolution=best_res,
         )
 
@@ -1399,14 +1429,14 @@ class TriTopic:
         if not self._is_fitted:
             raise ValueError("Model not fitted. Call fit() first.")
 
-        from sklearn.metrics.pairwise import cosine_similarity
+        from tritopic.utils.gpu import gpu_cosine_similarity
 
         new_embeddings = embeddings if embeddings is not None else self._embedding_engine.encode(documents)
 
         non_outlier_topics = [t for t in self.topics_ if t.topic_id != -1]
         topic_ids = np.array([t.topic_id for t in non_outlier_topics])
 
-        sim_matrix = cosine_similarity(new_embeddings, self.topic_embeddings_)
+        sim_matrix = gpu_cosine_similarity(new_embeddings, self.topic_embeddings_)
         nearest_idx = np.argmax(sim_matrix, axis=1)
         max_sim = sim_matrix[np.arange(len(documents)), nearest_idx]
 
@@ -1434,11 +1464,11 @@ class TriTopic:
         if not self._is_fitted:
             raise ValueError("Model not fitted. Call fit() first.")
 
-        from sklearn.metrics.pairwise import cosine_similarity
         from scipy.special import softmax
+        from tritopic.utils.gpu import gpu_cosine_similarity
 
         new_embeddings = embeddings if embeddings is not None else self._embedding_engine.encode(documents)
-        sim_matrix = cosine_similarity(new_embeddings, self.topic_embeddings_)
+        sim_matrix = gpu_cosine_similarity(new_embeddings, self.topic_embeddings_)
         return softmax(sim_matrix * self.config.softmax_temperature, axis=1)
 
     def reduce_outliers(
@@ -1480,11 +1510,11 @@ class TriTopic:
             print(f"Reducing {len(outlier_indices)} outliers (strategy={strategy})...")
 
         if strategy == "embeddings":
-            from sklearn.metrics.pairwise import cosine_similarity
+            from tritopic.utils.gpu import gpu_cosine_similarity
 
             thresh = threshold if threshold is not None else self.config.outlier_threshold
             non_outlier_topics = [t for t in self.topics_ if t.topic_id != -1]
-            sim_matrix = cosine_similarity(
+            sim_matrix = gpu_cosine_similarity(
                 self.embeddings_[outlier_indices], self.topic_embeddings_
             )
 

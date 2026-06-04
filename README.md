@@ -22,6 +22,7 @@ A state-of-the-art topic modeling library that fuses semantic embeddings, lexica
 - [Quick Start](#quick-start)
 - [The Pipeline](#the-pipeline)
 - [Configuration Reference](#configuration-reference)
+- [Choosing min_cluster_size](#choosing-min_cluster_size)
 - [Memory Optimization for Large Datasets](#memory-optimization-for-large-datasets)
 - [Adaptive kNN Backend](#adaptive-knn-backend)
 - [Troubleshooting](#troubleshooting)
@@ -115,6 +116,51 @@ pip install -e ".[dev]"
 **Optional:** anthropic, openai, google-genai (for LLM labeling), pacmap, datamapplot (for advanced visualizations)
 
 **Python:** 3.9, 3.10, 3.11, 3.12, 3.13
+
+---
+
+### GPU Acceleration (optional)
+
+TriTopic can offload the most compute-intensive steps to one or more CUDA GPUs.
+CPU is always the automatic fallback — no code changes required and no errors if
+torch / FAISS / cuML are absent.
+
+#### What runs on GPU
+
+| Step | GPU library | Speedup (typical) | Quality change |
+|------|-------------|-------------------|----------------|
+| Cosine similarity (transform, inference, refinement) | PyTorch | 20–100× | None |
+| Embedding refinement loop | PyTorch | 5–20× | None |
+| kNN graph construction (≥ 5k docs) | FAISS | 10–50× | None (exact) |
+| UMAP dimensionality reduction | RAPIDS cuML | 5–30× | None |
+| Coreset MiniBatchKMeans (cumulative mode) | RAPIDS cuML | 5–15× | Near-zero |
+| Document embedding | sentence-transformers (already GPU-aware) | varies | None |
+
+#### Install
+
+```bash
+# PyTorch + FAISS — covers cosine similarity, refinement loop, and kNN
+pip install "tritopic[gpu]"
+
+# On a CUDA machine, swap faiss-cpu for the GPU build:
+pip install faiss-gpu
+
+# RAPIDS cuML — adds GPU UMAP and GPU MiniBatchKMeans
+# Install via conda (cuML has no standard pip wheel):
+conda install -c rapidsai -c conda-forge cuml=24.06 cuda-version=12.0
+# Once installed, TriTopic detects cuML automatically — no further config needed.
+```
+
+#### Multi-GPU behaviour
+
+| GPUs available | cosine similarity | kNN | UMAP | Embedding |
+|----------------|-------------------|-----|------|-----------|
+| 0 (CPU only) | sklearn | hnswlib / exact | umap-learn | CPU |
+| 1 | torch `cuda:0` | FAISS GPU | cuML UMAP | ST on `cuda:0` |
+| N > 1 | torch `cuda:0` | FAISS multi-GPU | cuML UMAP | ST multi-process pool |
+
+All GPU paths are wrapped in `try/except` — a missing package or a CUDA OOM
+falls back to the CPU implementation silently.
 
 ---
 
@@ -307,7 +353,8 @@ config = TriTopicConfig(
     # --- Clustering ---
     resolution=1.0,                        # Leiden resolution (higher = more topics)
     n_consensus_runs=10,                   # number of Leiden runs for consensus
-    min_cluster_size=5,                    # clusters smaller than this become outliers
+    min_cluster_size=5,                    # absolute floor: communities smaller than this become outliers (-1)
+    min_cluster_fraction=None,             # recommended: 0.005 — see "Choosing min_cluster_size" below
     consensus_method="graph",              # "graph" (default, memory-safe) or "hierarchical"
     consensus_threshold_tau=0.5,           # τ for graph consensus: keep pairs that co-cluster in ≥τ·n_runs runs
 
@@ -359,6 +406,60 @@ model.config.use_dim_reduction = False       # disable dim reduction
 model.config.graph_type = "snn"              # use pure SNN graph
 model.config.keyword_method = "bm25"         # switch keyword method
 ```
+
+---
+
+## Choosing min_cluster_size
+
+After Leiden clustering, any community smaller than `min_cluster_size` is merged into the outlier class (`-1`). Getting this number right matters:
+
+- **Too small** (e.g. `5` on 100K docs): hundreds of micro-communities survive as topics; raw ARI against coarse ground-truth labels collapses.
+- **Too large** (e.g. `2000` on 10K-doc batches): all communities get filtered, `topic_embeddings_` becomes empty, and `transform()` crashes with a shape error.
+
+The fundamental problem with an absolute number is **scale sensitivity**: a community of 50 docs is meaningful at 1K documents but negligible at 100K.
+
+### Recommended: use `min_cluster_fraction`
+
+```python
+config = TriTopicConfig(
+    min_cluster_fraction=0.005,   # 0.5% of corpus — the one number to tune
+    # min_cluster_size stays at default=5 (acts as absolute floor only)
+)
+```
+
+At fit time, the effective threshold is `max(min_cluster_size, int(min_cluster_fraction × n_docs))`:
+
+| Corpus size | Effective min_cluster_size |
+|---|---|
+| 1K docs | 5 (floor) |
+| 10K docs (first batch) | 50 |
+| 50K docs (coreset) | 250 |
+| 120K docs (full fit) | 600 |
+
+This scales naturally across corpus sizes, so cumulative models that grow from a 10K first batch to a 120K full accumulator never need a different constant.
+
+**Tuning guide:**
+
+| `min_cluster_fraction` | Effect |
+|---|---|
+| `0.002` | Fine-grained — many sub-topics, higher outlier rate |
+| `0.005` | Balanced — recommended starting point |
+| `0.010` | Coarse — few large topics, lower outlier rate |
+
+**Precedence rules:**
+- `min_cluster_fraction=None` (default): only `min_cluster_size` is used (absolute mode).
+- `min_cluster_fraction` set: `max(min_cluster_size, fraction × n_docs)` — the absolute value acts as a hard floor.
+- Setting `min_cluster_size` to a large value with `min_cluster_fraction` also set: the larger of the two always wins.
+
+### Research basis
+
+This design follows three converging lines of reasoning:
+
+1. **Scale invariance** — standard statistical practice prefers relative thresholds over absolute counts when the input size is variable. An absolute cutoff optimised for one corpus size is arbitrary at another.
+
+2. **HDBSCAN community practice** — McInnes, Healy & Astels (2017) recommend expressing `min_cluster_size` as "roughly 1–5% of dataset size" in practice. TriTopic uses Leiden, not HDBSCAN, but the same post-clustering size filter has the same scale-sensitivity problem.
+
+3. **Resolution limit in community detection** — Fortunato & Barthélemy (2007) proved that modularity-based community detectors have a resolution limit that scales with graph size: communities become undetectable below a minimum size that grows with N. A fixed absolute filter is inconsistent with this limit as the corpus grows.
 
 ---
 
@@ -468,27 +569,33 @@ document embeddings. For corpora above a few thousand documents the exact
 refinement iteration. TriTopic 2.3.0 ships an **adaptive backend** that
 chooses between exact and approximate (HNSW) search based on corpus size:
 
-| Corpus size       | Backend              | HNSW params           |
-|-------------------|----------------------|------------------------|
-| < 5,000 docs      | exact (sklearn)      | —                      |
-| 5,000 – 49,999    | hnswlib HNSW         | `M=16`, `ef=200`       |
-| ≥ 50,000          | hnswlib HNSW         | `M=32`, `ef=400`       |
+| Corpus size       | Backend (priority)              | Notes                  |
+|-------------------|---------------------------------|------------------------|
+| < 5,000 docs      | exact (sklearn)                 | —                      |
+| ≥ 5,000 docs      | FAISS GPU *(if `gpu` extra + CUDA)* | exact, fastest    |
+| ≥ 5,000 docs      | FAISS CPU *(if `gpu` extra, no CUDA)* | exact, fast     |
+| ≥ 5,000 docs      | hnswlib HNSW *(if `fast-knn` extra)* | approx, M=16/32  |
+| any               | exact (sklearn) fallback        | always available       |
 
 The switch is invisible to everything downstream — mutual-kNN filtering, SNN
 computation and multi-view fusion receive identical `(neighbor_id, similarity)`
 output regardless of which backend ran.
 
-### Enabling the HNSW path
+### Enabling the FAISS path (recommended)
 
-HNSW is provided by the optional `fast-knn` extra:
+```bash
+pip install "tritopic[gpu]"        # includes faiss-cpu + torch
+pip install faiss-gpu              # optional: swap in GPU FAISS on CUDA machines
+```
+
+### Enabling the HNSW path (CPU-only alternative)
 
 ```bash
 pip install "tritopic[fast-knn]"
 ```
 
-When the extra isn't installed, `knn_backend="auto"` silently falls back to
-the exact sklearn path at every size — no behavior change vs. earlier
-TriTopic releases.
+When neither extra is installed, `knn_backend="auto"` silently falls back to
+the exact sklearn path — no behavior change vs. earlier TriTopic releases.
 
 ### Configuration
 
@@ -500,7 +607,8 @@ config = TriTopicConfig(
 )
 ```
 
-- `"auto"` (default): exact below `hnsw_small_threshold`, HNSW above.
+- `"auto"` (default): exact below `hnsw_small_threshold`; FAISS (GPU > CPU) or
+  HNSW above, depending on which extras are installed.
 - `"exact"`: always use sklearn. Use this for reproducibility benchmarks or
   to A/B against the approximate path.
 - `"hnsw"`: always use hnswlib (requires the `fast-knn` extra).
@@ -562,7 +670,8 @@ You can ignore the warning and use the resulting model normally.
 |---|---|---|
 | Crash at `Iteration 1...` with no traceback | Out of memory in consensus step | Lower `n_consensus_runs` (e.g. 5) or `consensus_threshold_tau` (e.g. 0.3); `low_memory=True` only helps the legacy `hierarchical` path |
 | `ImportError: cannot import name '...' from 'transformers'` in Colab | Colab silently upgraded torch/transformers mid-session | **Runtime -> Restart session**, then rerun |
-| Too many tiny topics | `resolution` too high or `min_cluster_size` too low | Lower `resolution` (e.g. 0.8) or raise `min_cluster_size` |
+| Too many tiny topics | `resolution` too high or `min_cluster_size` too low | Lower `resolution` (e.g. 0.8) or set `min_cluster_fraction=0.005` (scales with corpus size) |
+| `ValueError: Found array with 0 sample(s)` in `transform()` | `min_cluster_size` too large — all Leiden communities filtered to outliers | Lower `min_cluster_size`, or switch to `min_cluster_fraction=0.005` |
 | Too few large topics | `resolution` too low | Raise `resolution` (e.g. 1.3) or set `n_topics_target=N` |
 | 30%+ outliers | HDBSCAN-like over-pruning of small clusters | Call `model.reduce_outliers(strategy="embeddings")` after fit |
 | LLM labels are empty / generic | API call failed silently in earlier versions | v2.3.0+ retries with backoff; check API key and rate limits |

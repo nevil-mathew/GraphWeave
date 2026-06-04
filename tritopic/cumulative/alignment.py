@@ -70,9 +70,9 @@ def align_topics(
         return mapping, next_id, []
 
     from scipy.optimize import linear_sum_assignment
-    from sklearn.metrics.pairwise import cosine_similarity
+    from tritopic.utils.gpu import gpu_cosine_similarity
 
-    sim = cosine_similarity(new_centroids, registry_centroids)  # (k_new, k_reg)
+    sim = gpu_cosine_similarity(new_centroids, registry_centroids)  # (k_new, k_reg)
     # linear_sum_assignment minimises cost -> negate to maximise similarity.
     row_ind, col_ind = linear_sum_assignment(-sim)
 
@@ -109,13 +109,13 @@ def assign_to_registry(
     registry rather than a single model's centroids. Docs whose best match is
     below *outlier_threshold* are labelled ``-1``.
     """
-    from sklearn.metrics.pairwise import cosine_similarity
+    from tritopic.utils.gpu import gpu_cosine_similarity
 
     if registry_centroids is None or len(registry_centroids) == 0:
         return np.full(len(embeddings), -1, dtype=int)
 
     ids = np.asarray(registry_ids)
-    sim = cosine_similarity(embeddings, registry_centroids)
+    sim = gpu_cosine_similarity(embeddings, registry_centroids)
     nearest = np.argmax(sim, axis=1)
     max_sim = sim[np.arange(len(embeddings)), nearest]
     labels = ids[nearest]
@@ -184,7 +184,10 @@ def summarize_embeddings(
     centroids : np.ndarray   # (k_eff, d)
     counts : np.ndarray      # (k_eff,) members per micro-cluster
     """
-    from sklearn.cluster import MiniBatchKMeans
+    try:
+        from cuml.cluster import MiniBatchKMeans
+    except ImportError:
+        from sklearn.cluster import MiniBatchKMeans
 
     n = len(embeddings)
     k_eff = int(min(k, n))

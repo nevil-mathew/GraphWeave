@@ -100,6 +100,24 @@ full = [
     "datamapplot>=0.1.0",
     "hnswlib>=0.7.0",
 ]
+# GPU acceleration extras
+# -------------------------
+# gpu: FAISS for fast (optionally GPU-accelerated) kNN graph construction +
+#      torch for GPU cosine-similarity and embedding refinement.
+#      Install: pip install "tritopic[gpu]"
+#      faiss-cpu is the pip default; on a CUDA machine swap it out with:
+#        pip install faiss-gpu
+gpu = [
+    "torch>=2.0.0",
+    "faiss-cpu>=1.7.4",
+]
+# gpu-umap: RAPIDS cuML for GPU UMAP and GPU MiniBatchKMeans.
+#           cuML is distributed via conda, not pip — install it separately:
+#             conda install -c rapidsai -c conda-forge cuml=24.06 cuda-version=12.0
+#           Once cuml is in your environment, tritopic will use it automatically.
+#           This extra is intentionally empty (no pip-installable dep) so that
+#           `pip install "tritopic[gpu-umap]"` does not fail on non-CUDA machines.
+gpu-umap = []
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

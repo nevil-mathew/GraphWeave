@@ -75,16 +75,32 @@ class GraphBuilder:
             sublinear_tf=True,  # log(1+tf) dampens common term dominance
         )
     
-    def _select_knn_backend(self, n_samples: int) -> Literal["exact", "hnsw_small", "hnsw_large"]:
-        """Pick exact (<5k), HNSW-small (5k–50k), or HNSW-large (≥50k).
+    def _select_knn_backend(
+        self, n_samples: int
+    ) -> Literal["exact", "hnsw_small", "hnsw_large", "faiss_gpu", "faiss_cpu"]:
+        """Pick the best kNN backend.
 
+        Priority: faiss_gpu > faiss_cpu > hnsw_large/hnsw_small > exact.
         Falls back to exact when ``knn_backend='exact'`` is forced, the metric
-        isn't cosine, or hnswlib isn't importable.
+        isn't cosine, or no suitable library is importable.
         """
         if self.knn_backend == "exact":
             return "exact"
         if self.metric != "cosine":
             return "exact"
+
+        # FAISS path — preferred when available (GPU > CPU)
+        try:
+            import faiss  # noqa: F401
+            from tritopic.utils.gpu import is_gpu_available
+            if is_gpu_available() and n_samples >= self.hnsw_small_threshold:
+                return "faiss_gpu"
+            if n_samples >= self.hnsw_small_threshold:
+                return "faiss_cpu"
+        except ImportError:
+            pass
+
+        # Fallback: hnswlib
         try:
             import hnswlib  # noqa: F401
         except ImportError:
@@ -121,6 +137,17 @@ class GraphBuilder:
         if backend == "exact":
             return self._compute_knn_exact(embeddings, k)
 
+        if backend in ("faiss_gpu", "faiss_cpu"):
+            try:
+                return self._compute_knn_faiss(embeddings, k, use_gpu=backend == "faiss_gpu")
+            except Exception as exc:
+                if self.verbose:
+                    print(
+                        f"      kNN backend: FAISS failed ({type(exc).__name__}: {exc}); "
+                        f"falling back to exact."
+                    )
+                return self._compute_knn_exact(embeddings, k)
+
         try:
             return self._compute_knn_hnsw(embeddings, k, backend)
         except Exception as exc:
@@ -155,6 +182,61 @@ class GraphBuilder:
             similarities = 1 / (1 + distances)
 
         return distances, indices, similarities
+
+    def _compute_knn_faiss(
+        self,
+        embeddings: np.ndarray,
+        k: int,
+        use_gpu: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Exact kNN via FAISS (IndexFlatIP on L2-normalised vectors = cosine).
+
+        GPU path uses faiss.StandardGpuResources on cuda:0.  CPU path uses the
+        same index on the host.  Output contract is identical to
+        ``_compute_knn_exact``: distances are cosine *distances* (1 - sim),
+        self is always at column 0.
+        """
+        import faiss
+
+        n_samples, dim = embeddings.shape
+        k_query = min(k + 1, n_samples)
+
+        data = np.ascontiguousarray(embeddings, dtype=np.float32)
+        # L2-normalise so inner product == cosine similarity
+        faiss.normalize_L2(data)
+
+        index = faiss.IndexFlatIP(dim)
+        if use_gpu:
+            res = faiss.StandardGpuResources()
+            index = faiss.index_cpu_to_gpu(res, 0, index)
+
+        with step_timer("faiss-build", verbose=self.verbose, indent=9):
+            index.add(data)
+
+        with step_timer("faiss-query", verbose=self.verbose, indent=9):
+            sims, indices = index.search(data, k_query)  # sims in [-1, 1]
+
+        # Clamp numerical noise and convert to distance convention
+        sims = np.clip(sims, -1.0, 1.0).astype(np.float64)
+        distances = (1.0 - sims).astype(np.float64)
+        indices = indices.astype(np.int64)
+
+        # Guarantee self is at column 0 (FAISS usually places it first but not
+        # guaranteed when duplicate vectors exist).
+        for i in range(n_samples):
+            if indices[i, 0] != i:
+                hit = np.where(indices[i] == i)[0]
+                if hit.size > 0:
+                    j = int(hit[0])
+                    indices[i, 0], indices[i, j] = indices[i, j], indices[i, 0]
+                    distances[i, 0], distances[i, j] = distances[i, j], distances[i, 0]
+                    sims[i, 0], sims[i, j] = sims[i, j], sims[i, 0]
+                else:
+                    indices[i, 0] = i
+                    distances[i, 0] = 0.0
+                    sims[i, 0] = 1.0
+
+        return distances, indices, sims
 
     def _compute_knn_hnsw(
         self,

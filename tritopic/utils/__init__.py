@@ -9,6 +9,13 @@ from tritopic.utils.metrics import (
     keyword_jaccard,
 )
 from tritopic.utils.timing import step_timer
+from tritopic.utils.gpu import (
+    is_gpu_available,
+    gpu_count,
+    get_device,
+    gpu_cosine_similarity,
+    gpu_refine_embeddings,
+)
 
 __all__ = [
     "compute_coherence",
@@ -18,4 +25,9 @@ __all__ = [
     "compute_nmi",
     "keyword_jaccard",
     "step_timer",
+    "is_gpu_available",
+    "gpu_count",
+    "get_device",
+    "gpu_cosine_similarity",
+    "gpu_refine_embeddings",
 ]
