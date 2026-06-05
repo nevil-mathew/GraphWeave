@@ -59,10 +59,11 @@ class KeywordExtractor:
         topic_docs: list[str],
         all_docs: list[str] | None = None,
         n_keywords: int | None = None,
+        weights: np.ndarray | None = None,
     ) -> tuple[list[str], list[float]]:
         """
         Extract keywords from topic documents.
-        
+
         Parameters
         ----------
         topic_docs : list[str]
@@ -71,7 +72,12 @@ class KeywordExtractor:
             All documents in corpus (needed for c-TF-IDF).
         n_keywords : int, optional
             Override default n_keywords.
-            
+        weights : np.ndarray, optional
+            Per-``topic_docs`` representation weight. When given (c-TF-IDF only),
+            term frequencies are accumulated weighted, so a coreset doc standing
+            for many real docs contributes proportionally. ``None`` reproduces the
+            unweighted behaviour.
+
         Returns
         -------
         keywords : list[str]
@@ -80,9 +86,9 @@ class KeywordExtractor:
             Keyword scores.
         """
         n = n_keywords or self.n_keywords
-        
+
         if self.method == "ctfidf":
-            return self._extract_ctfidf(topic_docs, all_docs or topic_docs, n)
+            return self._extract_ctfidf(topic_docs, all_docs or topic_docs, n, weights)
         elif self.method == "bm25":
             return self._extract_bm25(topic_docs, all_docs or topic_docs, n)
         elif self.method == "keybert":
@@ -102,6 +108,7 @@ class KeywordExtractor:
         topic_docs: list[str],
         all_docs: list[str],
         n_keywords: int,
+        weights: np.ndarray | None = None,
     ) -> tuple[list[str], list[float]]:
         """
         Extract keywords using class-based TF-IDF (c-TF-IDF).
@@ -127,11 +134,16 @@ class KeywordExtractor:
             doc_freq = np.asarray((all_tf_sparse > 0).sum(axis=0)).ravel()
             self._idf = np.log(len(all_docs) / (1 + doc_freq))
 
-        # Concatenate topic docs into a single "class document"
-        topic_text = " ".join(topic_docs)
-
-        # Get term frequencies for topic (single doc → small dense array is fine)
-        topic_tf = self._vectorizer.transform([topic_text]).toarray()[0]
+        # Term frequencies for the topic. Unweighted: concatenate into one "class
+        # document". Weighted: sum per-doc term counts scaled by representation
+        # weight, so heavy coreset docs dominate proportionally.
+        if weights is None:
+            topic_text = " ".join(topic_docs)
+            topic_tf = self._vectorizer.transform([topic_text]).toarray()[0]
+        else:
+            w = np.asarray(weights, dtype=float)
+            tf_mat = self._vectorizer.transform(topic_docs)  # (n_topic_docs, vocab)
+            topic_tf = np.asarray(tf_mat.multiply(w[:, None]).sum(axis=0)).ravel()
 
         # c-TF-IDF = normalized_TF * IDF
         topic_tf_normalized = topic_tf / (topic_tf.sum() + 1e-10)

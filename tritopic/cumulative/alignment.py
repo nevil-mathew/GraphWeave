@@ -97,6 +97,209 @@ def identity_mapping(k_new: int, next_id: int) -> tuple[dict[int, int], int]:
     return mapping, next_id + k_new
 
 
+def _build_align_prompt(
+    new_summaries: list[dict],
+    registry_summaries: list[dict],
+    decide_rows: set[int],
+) -> tuple[str, str]:
+    """Build the (system, user) prompts asking the LLM to align new topics to globals.
+
+    Mirrors the proposer style in :meth:`TriTopic._propose_meta_themes`.
+    """
+    existing_lines = []
+    for r in registry_summaries:
+        kws = ", ".join(r.get("keywords", [])[:6])
+        existing_lines.append(f"  [global_id {int(r['global_id'])}] {r.get('label', '')}\n    keywords: {kws}")
+    existing_block = "\n".join(existing_lines)
+
+    new_lines = []
+    for row in sorted(decide_rows):
+        s = new_summaries[row]
+        kws = ", ".join(s.get("keywords", [])[:6])
+        new_lines.append(
+            f"  [row {row}] {s.get('label', '')} (n={s.get('size', 0)})\n    keywords: {kws}"
+        )
+    new_block = "\n".join(new_lines)
+
+    system_prompt = (
+        "You are a topic-alignment analyst for a longitudinal topic model. Each time a "
+        "corpus is re-clustered the new topics are arbitrary; you decide which NEW topics "
+        "are the SAME underlying theme as an EXISTING tracked global topic, so every theme "
+        "keeps a stable identity over time. Judge by subject and meaning, not exact wording "
+        "(vocabulary drifts). You always respond with valid JSON and nothing else."
+    )
+
+    user_prompt = f"""You are aligning freshly clustered topics to a registry of tracked themes.
+
+EXISTING GLOBAL TOPICS:
+{existing_block}
+
+NEW TOPICS:
+{new_block}
+
+RULES:
+- For each NEW topic decide whether it is the SAME theme as exactly one EXISTING global topic and give that global_id, OR mark it as a brand-new theme.
+- Several NEW topics MAY map to the SAME global_id (a theme that split or overlaps) — this is allowed and encouraged when they share meaning.
+- Only use global_id values listed under EXISTING GLOBAL TOPICS. If a NEW topic matches none of them, set "new_theme": true.
+- Match on the deeper subject/concern, not surface keyword overlap.
+
+OUTPUT FORMAT (JSON, no other text):
+{{
+  "assignments": [
+    {{"new_local_idx": 0, "global_id": 7}},
+    {{"new_local_idx": 2, "new_theme": true}}
+  ]
+}}"""
+    return system_prompt, user_prompt
+
+
+def _parse_alignment_response(
+    raw: str, valid_new_rows: set[int], valid_global_ids: set[int]
+) -> dict[int, int | None]:
+    """Parse the aligner JSON into ``{new_row_idx -> global_id | None}``.
+
+    ``None`` means "new theme". Robust 3-tier parse modeled on
+    :meth:`TriTopic._parse_proposer_response`: ``json.loads`` on the ``{...}``
+    substring, then a regex fallback. Invalid rows are dropped; an invalid /
+    hallucinated ``global_id`` is treated as a new theme; the first valid mention
+    of a row wins.
+    """
+    import json
+    import re
+
+    decisions: dict[int, int | None] = {}
+
+    def _record(row: int, gid: int | None, is_new: bool) -> None:
+        if row not in valid_new_rows or row in decisions:
+            return
+        if is_new or gid is None or gid not in valid_global_ids:
+            decisions[row] = None
+        else:
+            decisions[row] = gid
+
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start == -1 or end <= start:
+            raise ValueError("no JSON object found")
+        data = json.loads(raw[start:end])
+        for a in data.get("assignments", []) or []:
+            if "new_local_idx" not in a:
+                continue
+            row = int(a["new_local_idx"])
+            is_new = bool(a.get("new_theme", False))
+            gid = a.get("global_id")
+            _record(row, int(gid) if gid is not None else None, is_new)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        for m in re.finditer(
+            r'"new_local_idx"\s*:\s*(\d+)\s*,\s*(?:"global_id"\s*:\s*(\d+)|"new_theme"\s*:\s*true)',
+            raw,
+        ):
+            row = int(m.group(1))
+            gid = int(m.group(2)) if m.group(2) is not None else None
+            _record(row, gid, gid is None)
+
+    return decisions
+
+
+def llm_align_topics(
+    new_summaries: list[dict],
+    registry_summaries: list[dict],
+    labeler,
+    next_id: int,
+    *,
+    restrict_rows: set[int] | None = None,
+    seed_mapping: dict[int, int] | None = None,
+    new_centroids: np.ndarray | None = None,
+    registry_centroids: np.ndarray | None = None,
+    registry_ids: list[int] | None = None,
+    threshold: float = 0.6,
+) -> tuple[dict[int, int], int, list[tuple[int, int, float]]]:
+    """LLM counterpart to :func:`align_topics` — same ``(mapping, next_id, matches)`` contract.
+
+    Asks an LLM which freshly clustered topics correspond to existing global
+    topics (by label + keywords), allowing many-to-one merges and brand-new
+    themes. ``new_summaries`` is row-aligned with the new centroids; each entry is
+    ``{"label", "keywords", "size"}``. ``registry_summaries`` carries the existing
+    global topics as ``{"global_id", "label", "keywords"}``.
+
+    Parameters mirror the cosine path plus:
+
+    restrict_rows
+        Only let the LLM (re)decide these new rows (``both`` mode); others keep
+        their *seed_mapping* value. ``None`` = decide every row.
+    seed_mapping
+        Pre-existing ``row -> global_id`` decisions to start from (cosine result
+        in ``both`` mode).
+
+    On **any** LLM/parse failure this falls back to the cosine result so a
+    recluster never crashes: the completed *seed_mapping* in ``both`` mode, or
+    :func:`align_topics` when no seed is available. The returned mapping is always
+    a total function over ``range(len(new_summaries))``.
+    """
+    import warnings
+
+    k_new = len(new_summaries)
+    mapping: dict[int, int] = dict(seed_mapping or {})
+
+    def _complete(m: dict[int, int], nid: int) -> tuple[dict[int, int], int]:
+        for i in range(k_new):
+            if i not in m:
+                m[i] = nid
+                nid += 1
+        return m, nid
+
+    # First epoch / empty registry: sequential fresh IDs, no LLM call.
+    if not registry_summaries:
+        m, nid = _complete(mapping, next_id)
+        return m, nid, []
+
+    valid_global_ids = {int(r["global_id"]) for r in registry_summaries}
+    reg_pos = {int(r["global_id"]): p for p, r in enumerate(registry_summaries)}
+    decide_rows = (
+        set(range(k_new))
+        if restrict_rows is None
+        else {int(r) for r in restrict_rows if 0 <= int(r) < k_new}
+    )
+
+    try:
+        if decide_rows:
+            system_prompt, user_prompt = _build_align_prompt(
+                new_summaries, registry_summaries, decide_rows
+            )
+            raw = labeler.call_raw(system_prompt, user_prompt, max_tokens=4000)
+            decisions = _parse_alignment_response(raw, decide_rows, valid_global_ids)
+        else:
+            decisions = {}
+    except Exception as exc:  # network, parse, missing labeler -> cosine fallback
+        warnings.warn(
+            f"LLM topic alignment failed ({exc}); falling back to cosine alignment.",
+            stacklevel=2,
+        )
+        if seed_mapping is not None:
+            m, nid = _complete(dict(seed_mapping), next_id)
+            return m, nid, []
+        return align_topics(new_centroids, registry_centroids, registry_ids, threshold, next_id)
+
+    matches: list[tuple[int, int, float]] = []
+    for row in sorted(decide_rows):
+        if row in decisions:
+            gid = decisions[row]
+            if gid is not None:
+                mapping[row] = gid
+                matches.append((row, reg_pos[gid], 1.0))
+            else:  # explicit new theme
+                mapping[row] = next_id
+                next_id += 1
+        elif row not in mapping:  # LLM did not mention it and no seed -> fresh ID
+            mapping[row] = next_id
+            next_id += 1
+        # else: row omitted but seeded (both mode) -> keep cosine's guess
+
+    mapping, next_id = _complete(mapping, next_id)
+    return mapping, next_id, matches
+
+
 def assign_to_registry(
     embeddings: np.ndarray,
     registry_centroids: np.ndarray,
@@ -165,6 +368,91 @@ def select_coreset(
         p = p / p.sum()
         idx = rng.choice(n, size=size, replace=False, p=p)
     return np.sort(idx)
+
+
+def stratified_coreset(
+    embeddings: np.ndarray,
+    size: int,
+    labels: np.ndarray,
+    new_count: int,
+    random_state: int = 42,
+    floor: float = 0.25,
+    min_per_cluster: int = 50,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Coreset that guarantees each current topic a floor of representatives.
+
+    Plain :func:`select_coreset` samples each topic ~its population share, so a
+    rare topic (e.g. 0.5% of the corpus) can land below Leiden's
+    ``min_cluster_size`` and vanish on the next refit (tail-collapse). This
+    allocates a per-topic floor of ``min(min_per_cluster, topic_size)`` first,
+    then distributes the remaining budget proportional to topic size, and samples
+    *within* each stratum by recency weight (reusing :func:`recency_weights`).
+
+    *labels* is the current global label per accumulated doc (``-1`` = outlier),
+    one per row of *embeddings*. Returns sorted ``indices`` plus the per-selected
+    inclusion probability ``p_i`` (its stratum's ``m_c / N_c``); the caller turns
+    that into an inverse-propensity representation weight ``1 / p_i``. Floors are
+    honoured when *size* is large enough to admit them; otherwise allocations are
+    scaled down to fit the budget. Falls back to recency sampling when no labels.
+
+    Returns
+    -------
+    indices : np.ndarray   # sorted row indices, len <= size
+    probs   : np.ndarray   # inclusion probability per selected row (aligned)
+    """
+    n = len(embeddings)
+    if labels is None or len(labels) != n:
+        idx = select_coreset(embeddings, size, random_state, recency_weights(n, new_count, floor))
+        return idx, np.full(len(idx), min(1.0, len(idx) / max(n, 1)))
+    if size >= n:
+        return np.arange(n), np.ones(n)
+
+    rng = np.random.default_rng(random_state)
+    labels = np.asarray(labels)
+    rw = recency_weights(n, new_count, floor)
+
+    uniq = np.unique(labels)
+    rows_by_label = {c: np.where(labels == c)[0] for c in uniq}
+    sizes = {c: len(rows_by_label[c]) for c in uniq}
+
+    # Floor allocation, then proportional split of the remainder.
+    alloc = {c: min(min_per_cluster, sizes[c]) for c in uniq}
+    floor_total = sum(alloc.values())
+    if floor_total > size:
+        # Too many strata for the budget: scale floors down proportionally.
+        scale = size / floor_total
+        alloc = {c: max(1, int(alloc[c] * scale)) for c in uniq}
+    else:
+        remaining = size - floor_total
+        total_size = sum(sizes.values())
+        for c in uniq:
+            extra = int(round(remaining * sizes[c] / max(total_size, 1)))
+            alloc[c] = min(sizes[c], alloc[c] + extra)
+
+    # Guarantee the budget invariant (sum <= size): trim the largest allocations.
+    while sum(alloc.values()) > size:
+        c = max(alloc, key=alloc.get)
+        alloc[c] -= 1
+
+    chosen, probs = [], []
+    for c in uniq:
+        rows = rows_by_label[c]
+        m_c = min(alloc[c], len(rows))
+        if m_c <= 0:
+            continue
+        if m_c >= len(rows):
+            sel = rows
+        else:
+            w = rw[rows]
+            w = w / w.sum()
+            sel = rng.choice(rows, size=m_c, replace=False, p=w)
+        chosen.append(sel)
+        probs.append(np.full(len(sel), m_c / len(rows)))
+
+    idx = np.concatenate(chosen)
+    pr = np.concatenate(probs)
+    order = np.argsort(idx)
+    return idx[order], pr[order]
 
 
 def summarize_embeddings(

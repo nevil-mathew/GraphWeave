@@ -82,6 +82,7 @@ legacy-consensus = [
 ]
 llm = [
     "anthropic>=0.18.0",
+    # also powers OpenRouter and any OpenAI-compatible endpoint (via base_url)
     "openai>=1.0.0",
     "google-genai>=1.0.0",
 ]
@@ -106,9 +107,10 @@ full = [
 # -------------------------
 # gpu: FAISS for fast (optionally GPU-accelerated) kNN graph construction +
 #      torch for GPU cosine-similarity and embedding refinement.
-#      Install: pip install "tritopic[gpu]"
+#      Install: pip install "tritopic[gpu]"  (also included in tritopic[full])
 #      faiss-cpu is the pip default; on a CUDA machine swap it out with:
-#        pip install faiss-gpu
+#        pip install faiss-gpu-cu11   (CUDA 11.x)
+#        pip install faiss-gpu-cu12   (CUDA 12.x)
 gpu = [
     "torch>=2.0.0",
     "faiss-cpu>=1.7.4",

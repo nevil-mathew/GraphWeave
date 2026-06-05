@@ -231,6 +231,12 @@ class TriTopic:
     >>> model.fit_transform(documents)
     >>> labeler = LLMLabeler(provider="anthropic", api_key="...")
     >>> model.generate_labels(labeler)
+
+    Or via OpenRouter (any OpenAI-compatible model):
+
+    >>> labeler = LLMLabeler(provider="openrouter", api_key="sk-or-...",
+    ...                      model="anthropic/claude-3.5-haiku")
+    >>> model.generate_labels(labeler)
     """
     
     def __init__(
@@ -346,10 +352,11 @@ class TriTopic:
         documents: list[str],
         embeddings: np.ndarray | None = None,
         metadata: pd.DataFrame | None = None,
+        sample_weights: np.ndarray | None = None,
     ) -> "TriTopic":
         """
         Fit the topic model to documents.
-        
+
         Parameters
         ----------
         documents : list[str]
@@ -358,7 +365,11 @@ class TriTopic:
             Pre-computed embeddings. If None, computed automatically.
         metadata : pd.DataFrame, optional
             Document metadata for the metadata view.
-            
+        sample_weights : np.ndarray, optional
+            Per-document representation weight (e.g. how many real documents a
+            coreset point stands for). When given, topic centroids use a weighted
+            mean. ``None`` (default) reproduces the unweighted behaviour exactly.
+
         Returns
         -------
         self : TriTopic
@@ -372,6 +383,14 @@ class TriTopic:
                 f"Embeddings length ({len(embeddings)}) must match "
                 f"documents length ({len(documents)})."
             )
+        if sample_weights is not None and len(sample_weights) != len(documents):
+            raise ValueError(
+                f"sample_weights length ({len(sample_weights)}) must match "
+                f"documents length ({len(documents)})."
+            )
+        self.sample_weights_ = (
+            np.asarray(sample_weights, dtype=float) if sample_weights is not None else None
+        )
         if metadata is not None and len(metadata) != len(documents):
             raise ValueError(
                 f"Metadata length ({len(metadata)}) must match "
@@ -939,16 +958,18 @@ class TriTopic:
         self.topics_ = []
         unique_labels = np.unique(self.labels_)
 
+        weights = getattr(self, "sample_weights_", None)
         for label in unique_labels:
             mask = self.labels_ == label
             topic_indices = np.where(mask)[0]
             topic_docs = [documents[i] for i in topic_indices]
 
-            # Extract keywords
+            # Extract keywords (weighted by representation mass when available)
             keywords, scores = self._keyword_extractor.extract(
                 topic_docs,
                 all_docs=documents,
                 n_keywords=self.config.n_keywords,
+                weights=weights[topic_indices] if weights is not None else None,
             )
 
             # Find representative documents per configured sampling strategy
@@ -995,10 +1016,15 @@ class TriTopic:
         self.topic_embeddings_ = np.zeros((len(unique_labels), base_emb.shape[1]))
 
         topic_lookup = {t.topic_id: t for t in self.topics_}
+        weights = getattr(self, "sample_weights_", None)
 
         for i, label in enumerate(unique_labels):
             mask = self.labels_ == label
-            self.topic_embeddings_[i] = base_emb[mask].mean(axis=0)
+            if weights is not None:
+                w = weights[mask]
+                self.topic_embeddings_[i] = np.average(base_emb[mask], axis=0, weights=w)
+            else:
+                self.topic_embeddings_[i] = base_emb[mask].mean(axis=0)
             if label in topic_lookup:
                 topic_lookup[label].centroid = self.topic_embeddings_[i]
     

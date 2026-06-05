@@ -6,6 +6,16 @@ Generate human-readable topic labels using LLMs:
 - Claude (Anthropic)
 - GPT-4 (OpenAI)
 - Gemini (Google)
+- OpenRouter (and any OpenAI-compatible endpoint via ``base_url``)
+
+OpenRouter example::
+
+    from tritopic import LLMLabeler
+    labeler = LLMLabeler(
+        provider="openrouter",
+        api_key="sk-or-...",
+        model="anthropic/claude-3.5-haiku",  # OpenRouter vendor/model id
+    )
 
 Two output styles:
 - "short"  : 3-7 word title + 1-2 sentence description (default; backward compatible)
@@ -28,11 +38,17 @@ class LLMLabeler:
     Parameters
     ----------
     provider : str
-        LLM provider: "anthropic", "openai", or "google"
+        LLM provider: "anthropic", "openai", "google", or "openrouter".
     api_key : str
         API key for the provider.
     model : str, optional
-        Model name. Defaults to best available model.
+        Model name. Defaults to best available model. For ``openrouter`` use
+        the ``vendor/model`` form (e.g. "anthropic/claude-3.5-haiku").
+    base_url : str, optional
+        Override the API base URL. For ``openrouter`` this defaults to
+        https://openrouter.ai/api/v1. For ``openai`` it lets you target any
+        OpenAI-compatible endpoint (e.g. a local Ollama server). Ignored by
+        the ``anthropic`` and ``google`` providers.
     max_tokens : int, optional
         Maximum tokens in response. When ``style="theme"`` and this is left at
         the default, a higher per-call cap is used automatically.
@@ -64,9 +80,10 @@ class LLMLabeler:
 
     def __init__(
         self,
-        provider: Literal["anthropic", "openai", "google"] = "anthropic",
+        provider: Literal["anthropic", "openai", "google", "openrouter"] = "anthropic",
         api_key: str | None = None,
         model: str | None = None,
+        base_url: str | None = None,
         max_tokens: int | None = None,
         temperature: float = 0.3,
         language: str = "english",
@@ -80,6 +97,7 @@ class LLMLabeler:
     ):
         self.provider = provider
         self.api_key = api_key
+        self.base_url = base_url
         self.model = model or self._default_model()
         self.temperature = temperature
         self.language = language
@@ -111,6 +129,8 @@ class LLMLabeler:
             return "claude-haiku-4-5-20251001"
         elif self.provider == "google":
             return "gemini-2.5-flash"
+        elif self.provider == "openrouter":
+            return "anthropic/claude-3.5-haiku"
         else:
             return "gpt-4o-mini"
     
@@ -137,10 +157,24 @@ class LLMLabeler:
                     "google-genai package not installed. "
                     "Install with: pip install google-genai"
                 )
+        elif self.provider == "openrouter":
+            try:
+                from openai import OpenAI
+                self._client = OpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url or "https://openrouter.ai/api/v1",
+                )
+            except ImportError:
+                raise ImportError(
+                    "openai package not installed. "
+                    "Install with: pip install openai"
+                )
         else:
             try:
                 from openai import OpenAI
-                self._client = OpenAI(api_key=self.api_key)
+                # base_url, when set, targets any OpenAI-compatible endpoint
+                # (e.g. a local Ollama server); None preserves SDK defaults.
+                self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
             except ImportError:
                 raise ImportError(
                     "openai package not installed. "

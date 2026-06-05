@@ -97,7 +97,7 @@ class GraphBuilder:
                 return "faiss_gpu"
             if n_samples >= self.hnsw_small_threshold:
                 return "faiss_cpu"
-        except ImportError:
+        except Exception:
             pass
 
         # Fallback: hnswlib

@@ -73,7 +73,7 @@ On top of this multi-view graph, TriTopic applies **consensus Leiden clustering*
 | **Post-fit outlier reduction** | Reassigns outlier documents using centroid similarity or neighbor voting after the model is fitted |
 | **Hierarchical topic merging** | Iteratively merges the most similar topic pairs to reach a target count, or manually merges specific topics |
 | **Multiple keyword methods** | c-TF-IDF, BM25, and KeyBERT keyword extraction with automatic diversity |
-| **LLM-powered labels** | Generates human-readable topic names via Claude, GPT-4, or Gemini |
+| **LLM-powered labels** | Generates human-readable topic names via Claude, GPT-4, Gemini, or OpenRouter |
 | **Interactive visualizations** | 2D and 3D document maps, keyword bar charts, dendrograms, similarity heatmaps, and temporal topic evolution via Plotly |
 | **TensorFlow Projector export** | Export embeddings and topic metadata for [projector.tensorflow.org](https://projector.tensorflow.org) with one call |
 | **scikit-learn compatible** | Familiar `fit()` / `transform()` / `fit_transform()` API |
@@ -142,8 +142,9 @@ torch / FAISS / cuML are absent.
 # PyTorch + FAISS — covers cosine similarity, refinement loop, and kNN
 pip install "tritopic[gpu]"
 
-# On a CUDA machine, swap faiss-cpu for the GPU build:
-pip install faiss-gpu
+# On a CUDA machine, swap faiss-cpu for the GPU build (CUDA 11 or 12):
+pip install faiss-gpu-cu11   # CUDA 11.x
+pip install faiss-gpu-cu12   # CUDA 12.x
 
 # RAPIDS cuML — adds GPU UMAP and GPU MiniBatchKMeans
 # Install via conda (cuML has no standard pip wheel):
@@ -923,7 +924,36 @@ labeler = LLMLabeler(
 model.generate_labels(labeler)
 ```
 
-Install the required extra: `pip install tritopic[llm]` (includes all three providers).
+### With OpenRouter (or any OpenAI-compatible endpoint)
+
+OpenRouter exposes an OpenAI-compatible API, so it works through the same `openai`
+package — no extra dependency. Use the `vendor/model` id and set
+`provider="openrouter"`:
+
+```python
+labeler = LLMLabeler(
+    provider="openrouter",
+    api_key="sk-or-...",
+    model="anthropic/claude-3.5-haiku",   # any model on openrouter.ai/models
+)
+model.generate_labels(labeler)
+```
+
+The same `labeler` also drives LLM merging / report-theme synthesis via
+`model.generate_report_themes(labeler)`. To target a different OpenAI-compatible
+server (e.g. a local Ollama instance), pass `provider="openai"` with a custom
+`base_url`:
+
+```python
+labeler = LLMLabeler(
+    provider="openai",
+    api_key="ollama",
+    base_url="http://localhost:11434/v1",
+    model="llama3.1",
+)
+```
+
+Install the required extra: `pip install tritopic[llm]` (includes all providers).
 
 ### Controlling prompt size
 

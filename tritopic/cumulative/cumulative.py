@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import copy
 import warnings
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
@@ -38,12 +38,16 @@ from tritopic.cumulative.alignment import (
     align_topics,
     assign_to_registry,
     identity_mapping,
+    llm_align_topics,
 )
 from tritopic.cumulative.strategies import (
     ReclusterContext,
     WorkingSet,
     make_strategy,
 )
+
+if TYPE_CHECKING:
+    from tritopic.labeling.llm_labeler import LLMLabeler
 
 
 @dataclass
@@ -66,11 +70,21 @@ class CumulativeConfig:
 
     # Unbounded-growth control (Regime A -> B switch).
     max_inmemory_docs: int = 300_000          # absolute working-set cap (representative points)
-    coreset_size: int = 50_000                # size of the recency-weighted coreset summary
+    coreset_size: int = 50_000                # size of the coreset summary
+    coreset_selection: Literal["stratified", "recency"] = "stratified"  # how reduced sets are sampled
+    min_docs_per_topic_in_coreset: int = 50   # stratified per-topic floor (anti tail-collapse)
 
     # Cross-epoch topic alignment (stable global topic IDs).
     align_topics: bool = True
     align_threshold: float = 0.6              # cosine; below this a new topic gets a fresh global ID
+    # Alignment method (independent of one another; consulted only when align_topics=True):
+    #   "cosine" — geometric Hungarian match on centroids (default, zero cost).
+    #   "llm"    — an LLM judges correspondence from topic label + keywords.
+    #   "both"   — cosine first, then the LLM re-examines only the ambiguous rows.
+    align_method: Literal["cosine", "llm", "both"] = "cosine"
+    align_labeler: "LLMLabeler | None" = field(default=None, repr=False)
+    llm_align_both_low: float = 0.45          # "both": informational lower edge of the ambiguous band
+    llm_align_both_high: float = 0.75         # "both": cosine sim >= high is locked to cosine (LLM skipped)
 
     verbose: bool = False
 
@@ -150,6 +164,7 @@ class CumulativeTriTopic:
         self._registry_centroids: np.ndarray | None = None
         self._registry_ids: list[int] = []
         self._registry_counts: np.ndarray | None = None
+        self._registry_summaries: dict[int, dict] = {}  # global_id -> {"label", "keywords"} (for LLM alignment)
         self._next_global_id: int = 0
         self._local_id_to_global: dict[int, int] = {}
 
@@ -208,21 +223,24 @@ class CumulativeTriTopic:
         self._last_batch_len = len(documents)
         self._docs_since_recluster += len(documents)
 
+        # Extend the global labelling with this batch's transform-based
+        # assignments so labels_ always spans the full accumulator. This must
+        # happen *before* a recluster too, so a stratified coreset can stratify
+        # on the new batch's current-topic labels (recluster() then overwrites
+        # labels_ wholesale via _align_and_assign).
+        if pre_assignments is not None:
+            self.labels_ = (
+                pre_assignments
+                if self.labels_ is None
+                else np.concatenate([self.labels_, pre_assignments])
+            )
+
         do_recluster = self._should_recluster(first=first, novelty=novelty)
         if do_recluster:
             self.recluster()
             assignments = self.labels_[-len(documents):]
         else:
-            # No recluster: extend the global labelling with this batch's
-            # transform-based assignments so labels_ always spans the full
-            # accumulator (these are refreshed at the next recluster).
             assignments = pre_assignments
-            if pre_assignments is not None:
-                self.labels_ = (
-                    pre_assignments
-                    if self.labels_ is None
-                    else np.concatenate([self.labels_, pre_assignments])
-                )
 
         if self.config.verbose:
             tag = "reclustered" if do_recluster else "assigned"
@@ -257,11 +275,14 @@ class CumulativeTriTopic:
             max_inmemory_docs=self.config.max_inmemory_docs,
             coreset_size=self.config.coreset_size,
             random_state=self.base_config.random_state,
+            labels=self.labels_,
+            coreset_selection=self.config.coreset_selection,
+            min_per_cluster=self.config.min_docs_per_topic_in_coreset,
         )
         ws = self._strategy.select_working_set(ctx)
 
         new_model = TriTopic(config=copy.deepcopy(self.base_config))
-        new_model.fit(ws.documents, embeddings=ws.embeddings)
+        new_model.fit(ws.documents, embeddings=ws.embeddings, sample_weights=ws.weights)
 
         self._align_and_assign(new_model, ws)
 
@@ -811,8 +832,18 @@ class CumulativeTriTopic:
         registry, and compute global labels for the whole accumulator."""
         non_outlier = [t for t in new_model.topics_ if t.topic_id != -1]
         new_local_ids = [t.topic_id for t in non_outlier]
-        new_sizes = np.array([t.size for t in non_outlier], dtype=float)
         new_centroids = new_model.topic_embeddings_
+
+        # Topic mass: sum of representation weights when the working set is weighted
+        # (so a coreset topic standing for many docs counts as such), else raw size.
+        if ws.weights is not None and new_model.labels_ is not None:
+            w = np.asarray(ws.weights, dtype=float)
+            new_sizes = np.array(
+                [w[np.asarray(new_model.labels_) == lid].sum() for lid in new_local_ids],
+                dtype=float,
+            )
+        else:
+            new_sizes = np.array([t.size for t in non_outlier], dtype=float)
 
         # Degenerate: no real topics this epoch.
         if new_centroids is None or len(new_local_ids) == 0:
@@ -820,27 +851,22 @@ class CumulativeTriTopic:
             self.labels_ = np.full(len(self._documents), -1, dtype=int)
             return
 
-        if self.config.align_topics:
-            mapping, self._next_global_id, _ = align_topics(
-                new_centroids,
-                self._registry_centroids,
-                self._registry_ids,
-                threshold=self.config.align_threshold,
-                next_id=self._next_global_id,
-            )
-        else:
-            mapping, self._next_global_id = identity_mapping(
-                len(new_centroids), self._next_global_id
-            )
+        mapping = self._run_alignment(non_outlier, new_centroids)
+
+        # Total-function guarantee: every new topic row must have a global ID.
+        for i in range(len(new_local_ids)):
+            if i not in mapping:
+                mapping[i] = self._next_global_id
+                self._next_global_id += 1
 
         self._local_id_to_global = {
             new_local_ids[i]: g for i, g in mapping.items()
         }
 
         if ws.covers_full_corpus:
-            self._replace_registry(new_centroids, new_local_ids, new_sizes)
+            self._replace_registry(new_centroids, new_local_ids, new_sizes, non_outlier)
         else:
-            self._accumulate_registry(new_centroids, new_local_ids, new_sizes, mapping)
+            self._accumulate_registry(new_centroids, new_local_ids, new_sizes, mapping, non_outlier)
 
         # Global labels for every accumulated document.
         if (
@@ -860,14 +886,132 @@ class CumulativeTriTopic:
                 self.base_config.outlier_threshold,
             )
 
+    @staticmethod
+    def _topic_summary(t) -> dict:
+        """Compact text summary of a topic for LLM alignment (label + keywords).
+
+        Labels are usually ``None`` at recluster time (``generate_labels`` not yet
+        run), so fall back to the top keywords.
+        """
+        keywords = list(t.keywords[:8]) if t.keywords else []
+        label = t.label or (
+            " & ".join(kw.title() for kw in keywords[:3]) if keywords else f"Topic {t.topic_id}"
+        )
+        return {"label": label, "keywords": keywords}
+
+    def _run_alignment(self, non_outlier: list, new_centroids: np.ndarray) -> dict[int, int]:
+        """Resolve the configured alignment method to a ``new_row -> global_id`` map.
+
+        Updates ``self._next_global_id``. Falls back to cosine when an LLM method
+        is requested without a labeler. Never raises from the LLM path.
+        """
+        if not self.config.align_topics:
+            mapping, self._next_global_id = identity_mapping(
+                len(new_centroids), self._next_global_id
+            )
+            return mapping
+
+        method = self.config.align_method
+        labeler = self.config.align_labeler
+        if method in ("llm", "both") and labeler is None:
+            warnings.warn(
+                f"align_method={method!r} requires config.align_labeler; "
+                "falling back to cosine alignment.",
+                stacklevel=2,
+            )
+            method = "cosine"
+
+        if method == "cosine":
+            mapping, self._next_global_id, _ = align_topics(
+                new_centroids,
+                self._registry_centroids,
+                self._registry_ids,
+                threshold=self.config.align_threshold,
+                next_id=self._next_global_id,
+            )
+            return mapping
+
+        new_summaries = [self._topic_summary(t) for t in non_outlier]
+        registry_summaries = [
+            {"global_id": gid, **self._registry_summaries.get(gid, {"label": "", "keywords": []})}
+            for gid in self._registry_ids
+        ]
+
+        if method == "llm":
+            mapping, self._next_global_id, _ = llm_align_topics(
+                new_summaries,
+                registry_summaries,
+                labeler,
+                self._next_global_id,
+                new_centroids=new_centroids,
+                registry_centroids=self._registry_centroids,
+                registry_ids=self._registry_ids,
+                threshold=self.config.align_threshold,
+            )
+            return mapping
+
+        # method == "both": cosine first, LLM re-examines only the ambiguous rows.
+        cos_map, next_after_cos, cos_matches = align_topics(
+            new_centroids,
+            self._registry_centroids,
+            self._registry_ids,
+            threshold=self.config.align_threshold,
+            next_id=self._next_global_id,
+        )
+        high = self.config.llm_align_both_high
+        sim_by_row = {int(r): float(s) for r, _c, s in cos_matches}
+        restrict_rows = {
+            i for i in range(len(new_summaries)) if sim_by_row.get(i, 0.0) < high
+        }
+        mapping, self._next_global_id, _ = llm_align_topics(
+            new_summaries,
+            registry_summaries,
+            labeler,
+            next_after_cos,
+            restrict_rows=restrict_rows,
+            seed_mapping=cos_map,
+            new_centroids=new_centroids,
+            registry_centroids=self._registry_centroids,
+            registry_ids=self._registry_ids,
+            threshold=self.config.align_threshold,
+        )
+        return mapping
+
     def _replace_registry(
-        self, new_centroids: np.ndarray, new_local_ids: list[int], new_sizes: np.ndarray
+        self,
+        new_centroids: np.ndarray,
+        new_local_ids: list[int],
+        new_sizes: np.ndarray,
+        non_outlier: list,
     ) -> None:
         """Registry := exactly the new topics (the working set represents the
-        whole corpus, so old topics are superseded)."""
-        self._registry_centroids = new_centroids.copy()
-        self._registry_ids = [self._local_id_to_global[lid] for lid in new_local_ids]
-        self._registry_counts = new_sizes.copy()
+        whole corpus, so old topics are superseded).
+
+        Many-to-one alignment can map several new locals onto one global ID; merge
+        those (count-weighted centroid, summed counts) so ``_registry_ids`` stays
+        unique with one summary per ID.
+        """
+        bank: dict[int, list] = {}
+        summaries: dict[int, dict] = {}
+        for i, lid in enumerate(new_local_ids):
+            gid = self._local_id_to_global[lid]
+            cen = new_centroids[i].astype(float)
+            size = float(new_sizes[i])
+            if gid in bank:
+                old_cen, old_cnt = bank[gid]
+                total = old_cnt + size
+                merged = (old_cen * old_cnt + cen * size) / max(total, 1e-12)
+                norm = np.linalg.norm(merged)
+                bank[gid] = [merged / norm if norm > 0 else merged, total]
+            else:
+                bank[gid] = [cen.copy(), size]
+                summaries[gid] = self._topic_summary(non_outlier[i])
+
+        ids = sorted(bank.keys())
+        self._registry_ids = ids
+        self._registry_centroids = np.array([bank[g][0] for g in ids])
+        self._registry_counts = np.array([bank[g][1] for g in ids], dtype=float)
+        self._registry_summaries = {g: summaries[g] for g in ids}
 
     def _accumulate_registry(
         self,
@@ -875,6 +1019,7 @@ class CumulativeTriTopic:
         new_local_ids: list[int],
         new_sizes: np.ndarray,
         mapping: dict[int, int],
+        non_outlier: list,
     ) -> None:
         """Merge batch topics into the persistent registry (approach #2): update
         matched globals via count-weighted running mean, append new globals."""
@@ -885,6 +1030,7 @@ class CumulativeTriTopic:
             ):
                 bank[int(gid)] = [cen.astype(float).copy(), float(cnt)]
 
+        summaries = dict(self._registry_summaries)
         for i, lid in enumerate(new_local_ids):
             gid = mapping[i]
             cen = new_centroids[i].astype(float)
@@ -897,11 +1043,13 @@ class CumulativeTriTopic:
                 bank[gid] = [merged / norm if norm > 0 else merged, total]
             else:
                 bank[gid] = [cen.copy(), size]
+                summaries[gid] = self._topic_summary(non_outlier[i])
 
         ids = sorted(bank.keys())
         self._registry_ids = ids
         self._registry_centroids = np.array([bank[g][0] for g in ids])
         self._registry_counts = np.array([bank[g][1] for g in ids], dtype=float)
+        self._registry_summaries = {g: summaries[g] for g in ids if g in summaries}
 
     def _make_global_topics(self) -> list:
         """Copy model_.topics_ with topic_id remapped to stable global IDs.

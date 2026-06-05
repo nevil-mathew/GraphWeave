@@ -65,10 +65,85 @@ def _mean_keyword_overlap(cum_model: TriTopic, full_model: TriTopic) -> float:
     return float(np.mean(overlaps)) if overlaps else 0.0
 
 
+def _rare_topic_recall(
+    cum_model: TriTopic,
+    full_model: TriTopic,
+    n_docs: int,
+    rare_frac: float,
+    sim_cutoff: float,
+) -> tuple[float, int]:
+    """Fraction of *small* full-batch topics that survive in the cumulative model.
+
+    A full-batch topic is "rare" if its size is below ``rare_frac * n_docs``; it is
+    "recovered" if some cumulative topic centroid is within ``sim_cutoff`` cosine of
+    it. This is the headline tail-collapse metric: random/recency coresets drop rare
+    topics, stratified coresets keep them.
+
+    Returns ``(recall, n_rare)``; recall is ``nan`` when there are no rare topics.
+    """
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    full_topics = [t for t in full_model.topics_ if t.topic_id != -1]
+    full_centroids = full_model.topic_embeddings_
+    cum_centroids = cum_model.topic_embeddings_ if cum_model is not None else None
+
+    rare = [j for j, t in enumerate(full_topics) if t.size < rare_frac * max(n_docs, 1)]
+    n_rare = len(rare)
+    if n_rare == 0 or full_centroids is None or len(full_centroids) == 0:
+        return float("nan"), n_rare
+    if cum_centroids is None or len(cum_centroids) == 0:
+        return 0.0, n_rare
+
+    sim = cosine_similarity(full_centroids, cum_centroids)  # (k_full, k_cum)
+    recovered = sum(1 for j in rare if j < sim.shape[0] and sim[j].max() >= sim_cutoff)
+    return recovered / n_rare, n_rare
+
+
+def coreset_cost_ratio(
+    working_emb: np.ndarray,
+    working_weights: np.ndarray | None,
+    full_emb: np.ndarray,
+    k: int,
+    random_state: int = 42,
+) -> float:
+    """Theory-aligned coreset quality: weighted k-means distortion on the working
+    set ÷ distortion on the full data, under reference centers fit on the full data.
+
+    A value near 1.0 means the coreset preserves the k-means cost (a good coreset);
+    large values mean the working set misrepresents the data's geometry. Call this
+    when a single strategy's working set + weights are on hand (it is intentionally
+    not part of the multi-strategy table, which does not retain working sets).
+    """
+    try:
+        from cuml.cluster import MiniBatchKMeans
+    except ImportError:
+        from sklearn.cluster import MiniBatchKMeans
+
+    k_eff = int(min(k, len(full_emb)))
+    if k_eff <= 1:
+        return float("nan")
+    km = MiniBatchKMeans(n_clusters=k_eff, random_state=random_state, n_init=3).fit(full_emb)
+    centers = km.cluster_centers_
+
+    def _distortion(emb: np.ndarray, w: np.ndarray | None) -> float:
+        # min squared distance of each point to any center, optionally weighted.
+        d2 = ((emb[:, None, :] - centers[None, :, :]) ** 2).sum(-1).min(axis=1)
+        if w is None:
+            return float(d2.mean())
+        w = np.asarray(w, dtype=float)
+        return float((d2 * w).sum() / max(w.sum(), 1e-12))
+
+    full_cost = _distortion(full_emb, None)
+    work_cost = _distortion(working_emb, working_weights)
+    return work_cost / max(full_cost, 1e-12)
+
+
 def compare_to_full_batch(
     cumulative: CumulativeTriTopic,
     full_model: TriTopic,
     labels_true: np.ndarray | None = None,
+    rare_frac: float = 0.01,
+    rare_sim_cutoff: float = 0.5,
 ) -> dict:
     """Compare a cumulative model to the full-batch baseline on the same corpus.
 
@@ -123,6 +198,13 @@ def compare_to_full_batch(
         "n_docs": len(cum_labels),
     }
     metrics["silhouette_delta"] = metrics["silhouette_cumulative"] - metrics["silhouette_full"]
+
+    # Tail-collapse: do the full-batch's rare topics survive in the cumulative model?
+    recall, n_rare = _rare_topic_recall(
+        cumulative.model_, full_model, len(cum_labels), rare_frac, rare_sim_cutoff
+    )
+    metrics["rare_topic_recall"] = recall
+    metrics["n_rare_topics_full"] = n_rare
 
     if labels_true is not None:
         metrics["ari_vs_truth_cumulative"] = compute_ari(cum_labels, labels_true)
