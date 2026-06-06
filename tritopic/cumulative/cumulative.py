@@ -778,6 +778,51 @@ class CumulativeTriTopic:
         )
         return self
 
+    def llm_merge_topics(
+        self,
+        labeler,
+        n_topics: int | None = None,
+        assign_labels: bool = True,
+        include_docs: bool = False,
+        use_structured_output: bool = True,
+    ) -> "CumulativeTriTopic":
+        """Semantically merge working-set topics using an LLM.
+
+        Delegates to :meth:`TriTopic.llm_merge_topics` on the internal model.
+        Mutates the internal TriTopic model in-place. ``self.labels_``,
+        ``self._local_id_to_global``, and the global topic registry become stale
+        until the next :meth:`recluster`.
+
+        Parameters
+        ----------
+        labeler : LLMLabeler
+            Provider, model, and sampling settings come from this instance.
+        n_topics : int, optional
+            Target number of topics after merging. ``None`` lets the LLM decide.
+        assign_labels : bool
+            Apply LLM-suggested labels to surviving topics. Default True.
+        include_docs : bool
+            Include representative doc snippets in the prompt. Default False.
+        use_structured_output : bool
+            Use provider-native JSON enforcement where supported. Default True.
+        """
+        self._require_fitted()
+        self.model_.llm_merge_topics(
+            labeler,
+            n_topics=n_topics,
+            assign_labels=assign_labels,
+            include_docs=include_docs,
+            use_structured_output=use_structured_output,
+        )
+        warnings.warn(
+            "llm_merge_topics() mutated the internal TriTopic model. "
+            "CumulativeTriTopic.labels_ and the global topic registry are now stale. "
+            "Call recluster() to re-synchronize.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return self
+
     @property
     def epoch(self) -> int:
         return self._epoch

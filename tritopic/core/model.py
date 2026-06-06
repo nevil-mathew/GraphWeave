@@ -1706,6 +1706,84 @@ class TriTopic:
 
         return self
 
+    def llm_merge_topics(
+        self,
+        labeler,
+        n_topics: int | None = None,
+        assign_labels: bool = True,
+        include_docs: bool = False,
+        use_structured_output: bool = True,
+    ) -> "TriTopic":
+        """Semantically merge topics using an LLM, with optional label assignment.
+
+        Sends all current topics (keywords + optionally representative docs) to
+        the LLM in a single call.  The LLM decides which topics are micro-topics
+        or duplicates and groups them into natural themes.  If *assign_labels* is
+        ``True``, the LLM-suggested label for each group is applied to the
+        surviving topic in the same call — no extra API round-trip required.
+
+        Parameters
+        ----------
+        labeler : LLMLabeler
+            Provider, model, temperature, caching, ``domain_hint``, ``n_docs``,
+            and ``doc_max_chars`` are all taken from this instance.
+        n_topics : int, optional
+            Target number of topics after merging.  ``None`` lets the LLM decide
+            which merges are natural without a hard constraint.
+        assign_labels : bool
+            Apply the LLM-suggested label to each surviving topic. Default True.
+        include_docs : bool
+            Include representative document snippets in the prompt (better
+            merge decisions, higher token cost). Count and truncation follow
+            ``labeler.n_docs`` and ``labeler.doc_max_chars``. Default False.
+        use_structured_output : bool
+            Use provider-native JSON schema enforcement (Google ``response_schema``,
+            OpenAI/OpenRouter ``response_format``). Anthropic always uses
+            prompt-only JSON. Default True.
+
+        Returns
+        -------
+        self : TriTopic
+        """
+        if not self._is_fitted:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        from tritopic.labeling.llm_merger import llm_merge_topics_call
+
+        topics_data = [
+            {
+                "topic_id": t.topic_id,
+                "size": t.size,
+                "keywords": t.keywords[: labeler.n_keywords],
+                "representative_docs": (
+                    [self.documents_[i] for i in t.representative_docs[: labeler.n_docs]]
+                    if include_docs
+                    else []
+                ),
+            }
+            for t in self.topics_
+            if t.topic_id != -1
+        ]
+
+        if not topics_data:
+            return self
+
+        groups = llm_merge_topics_call(
+            labeler, topics_data, n_topics, include_docs, use_structured_output
+        )
+
+        for group in groups:
+            ids = group["topic_ids"]
+            if len(ids) > 1:
+                self.merge_topics(ids)
+            if assign_labels and group.get("label"):
+                surviving_id = max(ids, key=lambda tid: int(np.sum(self.labels_ == tid)))
+                topic = next((t for t in self.topics_ if t.topic_id == surviving_id), None)
+                if topic:
+                    topic.label = group["label"]
+
+        return self
+
     def get_topic_info(self) -> pd.DataFrame:
         """
         Get a DataFrame with topic information.

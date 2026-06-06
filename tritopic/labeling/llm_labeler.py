@@ -31,6 +31,29 @@ import time
 from typing import Literal
 
 
+def _dict_to_genai_schema(d: dict):
+    """Recursively convert a JSON Schema dict to a ``google.genai.types.Schema``."""
+    from google.genai import types
+
+    type_map = {
+        "string": types.Type.STRING,
+        "integer": types.Type.INTEGER,
+        "number": types.Type.NUMBER,
+        "boolean": types.Type.BOOLEAN,
+        "object": types.Type.OBJECT,
+        "array": types.Type.ARRAY,
+    }
+    genai_type = type_map.get(d.get("type", "string").lower(), types.Type.STRING)
+    kwargs: dict = {"type": genai_type}
+    if "properties" in d:
+        kwargs["properties"] = {k: _dict_to_genai_schema(v) for k, v in d["properties"].items()}
+    if "required" in d:
+        kwargs["required"] = d["required"]
+    if "items" in d:
+        kwargs["items"] = _dict_to_genai_schema(d["items"])
+    return types.Schema(**kwargs)
+
+
 class LLMLabeler:
     """
     Generate topic labels using Large Language Models.
@@ -122,6 +145,10 @@ class LLMLabeler:
         # When True, the Google path skips the label/description response_schema
         # so callers can request arbitrary JSON shapes (e.g. meta-theme proposer).
         self._raw_mode: bool = False
+        # When set, _call_google uses this schema instead of the default label/description one.
+        self._override_schema: dict | None = None
+        # When True, _call_openai adds response_format={"type": "json_object"}.
+        self._json_object_mode: bool = False
     
     def _default_model(self) -> str:
         """Get default model for provider."""
@@ -295,7 +322,82 @@ class LLMLabeler:
         if cache_key is not None:
             self._cache["raw:" + cache_key] = response  # type: ignore[assignment]
         return response
-    
+
+    def call_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        schema: dict,
+        max_tokens: int | None = None,
+    ) -> str:
+        """LLM call with provider-native JSON schema enforcement where supported.
+
+        - **Google**: uses ``response_schema`` built from *schema*.
+        - **OpenAI / OpenRouter**: uses ``response_format={"type": "json_object"}``.
+        - **Anthropic**: falls through to :meth:`call_raw` (prompt-based JSON only).
+
+        On any provider-level exception the method warns and retries via
+        :meth:`call_raw` so callers always get a response to parse.
+
+        Returns the raw text response; caller is responsible for parsing.
+        Honors caching and retry behavior.
+        """
+        # Anthropic has no simple flat response_format — rely on prompt + parse.
+        if self.provider == "anthropic":
+            return self.call_raw(system_prompt, user_prompt, max_tokens=max_tokens)
+
+        self._init_client()
+
+        cache_key = self._cache_key(system_prompt, user_prompt) if self._cache is not None else None
+        if cache_key is not None:
+            cached = self._cache.get("structured:" + cache_key)
+            if cached:
+                return cached  # type: ignore[return-value]
+
+        saved_tokens = self.max_tokens
+        saved_raw = self._raw_mode
+        saved_schema = self._override_schema
+        saved_jo = self._json_object_mode
+        try:
+            if max_tokens is not None:
+                self.max_tokens = max_tokens
+            self._raw_mode = True          # skip default label/description schema on Google
+            self._override_schema = schema  # Google will use this
+            self._json_object_mode = True   # OpenAI/OpenRouter will use json_object mode
+
+            try:
+                if self.provider == "google":
+                    response = self._call_with_retry(
+                        lambda: self._call_google(system_prompt, user_prompt)
+                    )
+                else:
+                    response = self._call_with_retry(
+                        lambda: self._call_openai(system_prompt, user_prompt)
+                    )
+            except Exception as exc:
+                import warnings as _w
+                _w.warn(
+                    f"call_structured: structured output failed ({exc}); "
+                    "retrying with plain call_raw.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                # Reset modes before fallback so call_raw is clean
+                self._raw_mode = saved_raw
+                self._override_schema = saved_schema
+                self._json_object_mode = saved_jo
+                self.max_tokens = saved_tokens
+                return self.call_raw(system_prompt, user_prompt, max_tokens=max_tokens)
+        finally:
+            self.max_tokens = saved_tokens
+            self._raw_mode = saved_raw
+            self._override_schema = saved_schema
+            self._json_object_mode = saved_jo
+
+        if cache_key is not None:
+            self._cache["structured:" + cache_key] = response  # type: ignore[assignment]
+        return response
+
     def _build_prompt(
         self,
         keywords: list[str],
@@ -428,7 +530,7 @@ Respond ONLY with this exact JSON format, no other text:
 
     def _call_openai(self, system_prompt: str, user_prompt: str) -> str:
         """Call OpenAI API."""
-        response = self._client.chat.completions.create(
+        kwargs: dict = dict(
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
@@ -437,6 +539,9 @@ Respond ONLY with this exact JSON format, no other text:
                 {"role": "user", "content": user_prompt},
             ],
         )
+        if self._json_object_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        response = self._client.chat.completions.create(**kwargs)
         return response.choices[0].message.content
 
     def _call_google(self, system_prompt: str, user_prompt: str) -> str:
@@ -451,9 +556,10 @@ Respond ONLY with this exact JSON format, no other text:
             max_output_tokens=max(self.max_tokens, 1024),
             response_mime_type="application/json",
         )
-        # Only constrain to the label/description schema for standard topic
-        # labeling. Raw callers (e.g. meta-theme proposer) need free-form JSON.
-        if not self._raw_mode:
+        # Schema priority: caller-supplied override > default label/description > none (raw).
+        if self._override_schema is not None:
+            config_kwargs["response_schema"] = _dict_to_genai_schema(self._override_schema)
+        elif not self._raw_mode:
             config_kwargs["response_schema"] = types.Schema(
                 type=types.Type.OBJECT,
                 properties={
