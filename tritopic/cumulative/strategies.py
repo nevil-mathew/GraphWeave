@@ -29,6 +29,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from tritopic.cumulative.alignment import (
+    microcluster_coreset,
     recency_weights,
     select_coreset,
     stratified_coreset,
@@ -46,8 +47,25 @@ class ReclusterContext:
     coreset_size: int             # target size for coreset summaries
     random_state: int
     labels: np.ndarray | None = None        # current global label per doc (-1 = outlier)
-    coreset_selection: str = "stratified"   # "stratified" | "recency"
+    coreset_selection: str = "stratified"   # "stratified" | "recency" | "microcluster"
     min_per_cluster: int = 50               # stratified per-topic floor
+    coreset_sampling: str = "recency"       # "recency" | "sensitivity" (within-stratum)
+    reserve_novel: int = 0                  # force-keep this many recent outliers at full weight
+
+
+def _recent_outlier_rows(ctx: "ReclusterContext", cap: int) -> np.ndarray:
+    """The ``cap`` most-recent outlier (label ``-1``) row indices, newest first.
+
+    Emerging themes surface as recent outliers; force-keeping them (DenStream's
+    potential-micro-cluster idea) stops probabilistic sampling from dropping a
+    new theme before the next recluster can detect it.
+    """
+    if cap <= 0 or ctx.labels is None:
+        return np.empty(0, dtype=int)
+    outliers = np.where(np.asarray(ctx.labels) == -1)[0]
+    if len(outliers) == 0:
+        return np.empty(0, dtype=int)
+    return np.sort(outliers)[-cap:]  # tail == most recent
 
 
 def _select_reduced(ctx: "ReclusterContext", size: int) -> tuple[np.ndarray, np.ndarray | None]:
@@ -56,14 +74,31 @@ def _select_reduced(ctx: "ReclusterContext", size: int) -> tuple[np.ndarray, np.
     Stratified when labels are available (guarantees small topics a floor of
     representatives and yields inverse-propensity representation weights);
     otherwise recency-weighted random sampling with no weights (Regime A-like).
+    When ``reserve_novel`` is set (stratified path only), the most recent outlier
+    docs are force-included at full weight first and the rest of the budget is
+    sampled around them.
     """
-    if ctx.coreset_selection == "stratified" and ctx.labels is not None:
-        idx, probs = stratified_coreset(
-            ctx.embeddings, size, ctx.labels, ctx.new_count,
-            ctx.random_state, min_per_cluster=ctx.min_per_cluster,
+    if ctx.coreset_selection == "microcluster":
+        # Recent docs raw + summarized old history; size-bounded by a constant.
+        n_recent = min(ctx.new_count, size)
+        return microcluster_coreset(
+            ctx.embeddings, n_recent, max(1, size - n_recent), ctx.random_state
         )
-        weights = 1.0 / np.clip(probs, 1e-12, None)  # represented doc count per point
-        return idx, weights
+    if ctx.coreset_selection == "stratified" and ctx.labels is not None:
+        reserved = _recent_outlier_rows(ctx, min(ctx.reserve_novel, size))
+        idx, probs = stratified_coreset(
+            ctx.embeddings, size - len(reserved), ctx.labels, ctx.new_count,
+            ctx.random_state, min_per_cluster=ctx.min_per_cluster,
+            sampling=ctx.coreset_sampling,
+        )
+        # Merge reserved rows at weight 1.0 (they stand only for themselves),
+        # letting them override any sampled duplicate.
+        row_to_w = {int(i): 1.0 / max(p, 1e-12) for i, p in zip(idx, probs)}
+        for r in reserved:
+            row_to_w[int(r)] = 1.0
+        out_idx = np.array(sorted(row_to_w), dtype=int)
+        weights = np.array([row_to_w[int(i)] for i in out_idx], dtype=float)
+        return out_idx, weights
     weights_in = recency_weights(len(ctx.documents), ctx.new_count)
     idx = select_coreset(ctx.embeddings, size, ctx.random_state, weights_in)
     return idx, None

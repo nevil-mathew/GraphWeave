@@ -71,8 +71,17 @@ class CumulativeConfig:
     # Unbounded-growth control (Regime A -> B switch).
     max_inmemory_docs: int = 300_000          # absolute working-set cap (representative points)
     coreset_size: int = 50_000                # size of the coreset summary
-    coreset_selection: Literal["stratified", "recency"] = "stratified"  # how reduced sets are sampled
+    coreset_selection: Literal["stratified", "recency", "microcluster"] = "stratified"  # how reduced sets are sampled
     min_docs_per_topic_in_coreset: int = 50   # stratified per-topic floor (anti tail-collapse)
+    # Within-stratum sampling distribution (stratified selection only):
+    #   "recency"     — recency-weighted uniform (default; legacy behaviour).
+    #   "sensitivity" — lightweight-coreset importance sampling (Bachem et al.,
+    #                   KDD'18) modulated by recency; proven k-means error bounds.
+    coreset_sampling: Literal["recency", "sensitivity"] = "recency"
+    # Force-keep this many of the most recent outlier/novel docs in every coreset
+    # at full weight (DenStream-style buffer) so an emerging theme is not sampled
+    # away before the next recluster can detect it. 0 disables (default).
+    reserve_novel_docs: int = 0
 
     # Cross-epoch topic alignment (stable global topic IDs).
     align_topics: bool = True
@@ -278,6 +287,8 @@ class CumulativeTriTopic:
             labels=self.labels_,
             coreset_selection=self.config.coreset_selection,
             min_per_cluster=self.config.min_docs_per_topic_in_coreset,
+            coreset_sampling=self.config.coreset_sampling,
+            reserve_novel=self.config.reserve_novel_docs,
         )
         ws = self._strategy.select_working_set(ctx)
 

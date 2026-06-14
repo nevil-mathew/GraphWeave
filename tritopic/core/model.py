@@ -339,11 +339,18 @@ class TriTopic:
         threshold is proportional rather than absolute — critical for cumulative
         models whose fitting corpus grows from one batch to the full accumulator.
         The absolute ``min_cluster_size`` acts as the floor.
+
+        With a weighted coreset (``sample_weights_``) the fraction scales with
+        the total *represented* mass rather than the coreset point count, so the
+        threshold lands in the same units as the summed cluster mass that
+        :meth:`ConsensusLeiden._handle_small_clusters` prunes against.
         """
         if self.config.min_cluster_fraction is not None:
+            weights = getattr(self, "sample_weights_", None)
+            basis = float(weights.sum()) if weights is not None else n_docs
             return max(
                 self.config.min_cluster_size,
-                int(self.config.min_cluster_fraction * n_docs),
+                int(self.config.min_cluster_fraction * basis),
             )
         return self.config.min_cluster_size
 
@@ -526,8 +533,9 @@ class TriTopic:
             self.labels_ = self._clusterer.fit_predict(
                 self.graph_,
                 min_cluster_size=self._effective_min_cluster_size(len(self.embeddings_)),
+                node_weights=self.sample_weights_,
             )
-    
+
     def _fit_iterative(
         self,
         documents: list[str],
@@ -581,6 +589,7 @@ class TriTopic:
                     self.graph_,
                     min_cluster_size=self._effective_min_cluster_size(len(self.embeddings_)),
                     compute_stability=False,
+                    node_weights=self.sample_weights_,
                 )
 
             n_topics_found = len(np.unique(self.labels_[self.labels_ != -1]))
@@ -692,6 +701,7 @@ class TriTopic:
             graph,
             min_cluster_size=self._effective_min_cluster_size(len(self.embeddings_)),
             resolution=best_res,
+            node_weights=self.sample_weights_,
         )
 
         new_n = len(np.unique(self.labels_[self.labels_ != -1]))

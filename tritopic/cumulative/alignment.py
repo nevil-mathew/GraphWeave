@@ -343,6 +343,30 @@ def recency_weights(n: int, new_count: int, floor: float = 0.25) -> np.ndarray:
     return w
 
 
+def sensitivity_weights(embeddings: np.ndarray) -> np.ndarray:
+    """Lightweight-coreset importance distribution (Bachem, Lucic & Krause, KDD'18).
+
+    ``q(x) = ½·(1/n) + ½·‖x-μ‖² / Σ_j‖x_j-μ‖²`` with ``μ`` the mean embedding.
+    Points far from the mean — the ones that define cluster boundaries and carry
+    rare structure — get sampled more, while the uniform ½ term keeps every point
+    reachable. Sampling proportional to ``q`` with the matching unbiased coreset
+    weight ``1/(m·q(x))`` yields multiplicative ``(1±ε)`` k-means-style error
+    bounds, versus none for uniform sampling.
+
+    Returns a probability vector (sums to 1) over the rows of *embeddings*.
+    """
+    n = len(embeddings)
+    if n == 0:
+        return np.ones(0, dtype=float)
+    mu = embeddings.mean(axis=0)
+    diff = embeddings - mu
+    d2 = np.einsum("ij,ij->i", diff, diff)
+    total = float(d2.sum())
+    if total <= 0:  # all points identical -> uniform
+        return np.full(n, 1.0 / n, dtype=float)
+    return 0.5 / n + 0.5 * d2 / total
+
+
 def select_coreset(
     embeddings: np.ndarray,
     size: int,
@@ -378,6 +402,7 @@ def stratified_coreset(
     random_state: int = 42,
     floor: float = 0.25,
     min_per_cluster: int = 50,
+    sampling: str = "recency",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Coreset that guarantees each current topic a floor of representatives.
 
@@ -386,14 +411,25 @@ def stratified_coreset(
     ``min_cluster_size`` and vanish on the next refit (tail-collapse). This
     allocates a per-topic floor of ``min(min_per_cluster, topic_size)`` first,
     then distributes the remaining budget proportional to topic size, and samples
-    *within* each stratum by recency weight (reusing :func:`recency_weights`).
+    *within* each stratum (reusing :func:`recency_weights`).
+
+    ``sampling`` chooses the within-stratum distribution:
+
+    - ``"recency"`` (default) — sample by recency weight; every selected point in
+      a stratum gets the same inclusion probability ``m_c / N_c`` and so stands
+      for ``N_c / m_c`` docs.
+    - ``"sensitivity"`` — sample by the lightweight-coreset distribution
+      (:func:`sensitivity_weights`) modulated by recency; the inclusion
+      probability is per-point ``≈ m_c · p_i`` and the caller's ``1 / p_i`` is
+      the unbiased lightweight-coreset weight. Adds proven k-means error bounds
+      over the uniform-within-stratum default.
 
     *labels* is the current global label per accumulated doc (``-1`` = outlier),
     one per row of *embeddings*. Returns sorted ``indices`` plus the per-selected
-    inclusion probability ``p_i`` (its stratum's ``m_c / N_c``); the caller turns
-    that into an inverse-propensity representation weight ``1 / p_i``. Floors are
-    honoured when *size* is large enough to admit them; otherwise allocations are
-    scaled down to fit the budget. Falls back to recency sampling when no labels.
+    inclusion probability ``p_i``; the caller turns that into an inverse-propensity
+    representation weight ``1 / p_i``. Floors are honoured when *size* is large
+    enough to admit them; otherwise allocations are scaled down to fit the budget.
+    Falls back to recency sampling when no labels.
 
     Returns
     -------
@@ -402,7 +438,10 @@ def stratified_coreset(
     """
     n = len(embeddings)
     if labels is None or len(labels) != n:
-        idx = select_coreset(embeddings, size, random_state, recency_weights(n, new_count, floor))
+        w = recency_weights(n, new_count, floor)
+        if sampling == "sensitivity":
+            w = w * sensitivity_weights(embeddings)
+        idx = select_coreset(embeddings, size, random_state, w)
         return idx, np.full(len(idx), min(1.0, len(idx) / max(n, 1)))
     if size >= n:
         return np.arange(n), np.ones(n)
@@ -441,18 +480,91 @@ def stratified_coreset(
         if m_c <= 0:
             continue
         if m_c >= len(rows):
-            sel = rows
+            chosen.append(rows)
+            probs.append(np.ones(len(rows)))
+            continue
+
+        if sampling == "sensitivity":
+            # Lightweight-coreset distribution within the stratum, modulated by
+            # recency; record the per-point inclusion probability m_c · p_i so
+            # 1/p_i recovers the unbiased coreset weight.
+            p = sensitivity_weights(embeddings[rows]) * rw[rows]
+            p = p / p.sum()
+            sel_pos = rng.choice(len(rows), size=m_c, replace=False, p=p)
+            sel = rows[sel_pos]
+            chosen.append(sel)
+            probs.append(np.clip(m_c * p[sel_pos], 1e-12, 1.0))
         else:
             w = rw[rows]
             w = w / w.sum()
             sel = rng.choice(rows, size=m_c, replace=False, p=w)
-        chosen.append(sel)
-        probs.append(np.full(len(sel), m_c / len(rows)))
+            chosen.append(sel)
+            probs.append(np.full(len(sel), m_c / len(rows)))
 
     idx = np.concatenate(chosen)
     pr = np.concatenate(probs)
     order = np.argsort(idx)
     return idx[order], pr[order]
+
+
+def microcluster_coreset(
+    embeddings: np.ndarray,
+    n_recent: int,
+    k: int,
+    random_state: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Hybrid CluStream/BIRCH-style coreset: recent docs raw + summarized history.
+
+    Keeps the newest *n_recent* docs at full weight (1.0) and folds the older
+    history into at most *k* micro-clusters, each represented by the **real**
+    document nearest its centroid and carrying the micro-cluster's member count
+    as its weight. Using a real representative (not a synthetic centroid) keeps
+    document text available for keyword extraction; the count weight makes the
+    representative stand in for its whole micro-cluster downstream (weighted
+    pruning / centroids).
+
+    Unlike :func:`select_coreset`, the working-set size is ``n_recent + k`` —
+    bounded by a constant regardless of total accumulated ``N`` (true streaming),
+    rather than a fixed fraction of an ever-growing accumulator.
+
+    Returns sorted ``indices`` plus the per-row representation ``weights``.
+    """
+    try:
+        from cuml.cluster import MiniBatchKMeans
+    except ImportError:
+        from sklearn.cluster import MiniBatchKMeans
+
+    n = len(embeddings)
+    n_recent = int(min(max(n_recent, 0), n))
+    recent_idx = np.arange(n - n_recent, n)
+    old_n = n - n_recent
+    if old_n <= 0:
+        return recent_idx, np.ones(len(recent_idx), dtype=float)
+
+    old = embeddings[:old_n]
+    k_eff = int(min(k, old_n))
+    if k_eff <= 1:
+        d2 = np.einsum("ij,ij->i", old - old.mean(axis=0), old - old.mean(axis=0))
+        reps_idx = [int(np.argmin(d2))]
+        reps_w = [float(old_n)]
+    else:
+        km = MiniBatchKMeans(n_clusters=k_eff, random_state=random_state, n_init=3)
+        labels = np.asarray(km.fit_predict(old))
+        centers = km.cluster_centers_
+        reps_idx, reps_w = [], []
+        for c in range(k_eff):
+            members = np.where(labels == c)[0]
+            if len(members) == 0:
+                continue
+            diff = old[members] - centers[c]
+            nearest = members[int(np.argmin(np.einsum("ij,ij->i", diff, diff)))]
+            reps_idx.append(int(nearest))
+            reps_w.append(float(len(members)))
+
+    idx = np.concatenate([np.asarray(reps_idx, dtype=int), recent_idx])
+    w = np.concatenate([np.asarray(reps_w, dtype=float), np.ones(len(recent_idx))])
+    order = np.argsort(idx)
+    return idx[order], w[order]
 
 
 def summarize_embeddings(

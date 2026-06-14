@@ -75,18 +75,28 @@ class ConsensusLeiden:
         min_cluster_size: int = 5,
         resolution: float | None = None,
         compute_stability: bool = True,
+        node_weights: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Fit Leiden clustering with consensus.
-        
+
         Parameters
         ----------
         graph : igraph.Graph
             Input graph with edge weights.
         min_cluster_size : int
-            Minimum cluster size. Smaller clusters become outliers.
+            Minimum cluster size. Smaller clusters become outliers. When
+            *node_weights* is given this is compared against the summed
+            represented mass of a cluster, not its raw node count.
         resolution : float, optional
             Override default resolution.
+        node_weights : np.ndarray, optional
+            Per-node representation weight, aligned row-wise with the graph's
+            vertices (e.g. how many real documents a coreset point stands for).
+            When given, small-cluster pruning judges a cluster by its summed
+            represented mass rather than its raw node count, so a large theme
+            that is sparsely sampled in a coreset is not deleted as "small".
+            ``None`` (default) reproduces the unweighted behaviour exactly.
             
         Returns
         -------
@@ -98,6 +108,19 @@ class ConsensusLeiden:
 
         res = resolution or self.resolution
         n_nodes = graph.vcount()
+
+        # Represented mass per node, used for mass-based small-cluster pruning
+        # (see _handle_small_clusters). NOTE: leidenalg's
+        # RBConfigurationVertexPartition (this codebase's objective) uses a
+        # degree-based configuration null model and does not accept explicit
+        # node_sizes — only CPM/RBER/Significance/Surprise do — so the weight
+        # cannot be injected into the partition objective without switching
+        # objectives (which would change resolution semantics everywhere).
+        # Weight-awareness therefore enters via pruning here plus the weighted
+        # centroids/keywords in TriTopic.
+        self._node_weights = (
+            np.asarray(node_weights, dtype=float) if node_weights is not None else None
+        )
 
         from joblib import Parallel, delayed
 
@@ -396,13 +419,26 @@ class ConsensusLeiden:
         labels: np.ndarray,
         min_size: int,
     ) -> np.ndarray:
-        """Mark small clusters as outliers (-1)."""
-        result = labels.copy()
+        """Mark small clusters as outliers (-1).
 
-        unique, counts = np.unique(result, return_counts=True)
-        for cid, cnt in zip(unique, counts):
-            if cid != -1 and cnt < min_size:
-                result[result == cid] = -1
+        When per-node weights are present (a weighted coreset), "small" is
+        judged by the cluster's summed represented mass, not its raw node count
+        — otherwise a large real theme that happens to be sparsely sampled gets
+        deleted as small (tail-collapse), the very failure the coreset weighting
+        exists to prevent.
+        """
+        result = labels.copy()
+        node_weights = getattr(self, "_node_weights", None)
+
+        if node_weights is not None and len(node_weights) == len(result):
+            for cid in np.unique(result):
+                if cid != -1 and node_weights[result == cid].sum() < min_size:
+                    result[result == cid] = -1
+        else:
+            unique, counts = np.unique(result, return_counts=True)
+            for cid, cnt in zip(unique, counts):
+                if cid != -1 and cnt < min_size:
+                    result[result == cid] = -1
 
         # Relabel to consecutive integers (vectorized)
         non_outlier = np.sort(np.unique(result[result != -1]))
