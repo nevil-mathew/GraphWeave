@@ -335,7 +335,13 @@ flowchart TD
    remaining budget proportional to topic size, and samples **within** each stratum by
    `recency_weights`. It returns sorted `idx` plus each point's inclusion probability
    `p_i = m_c/N_c`; the strategy turns that into an inverse-propensity **representation
-   weight** `w_i = 1/p_i` (how many real docs the point stands for).
+   weight** `w_i = 1/p_i` (how many real docs the point stands for). Two refinements ride
+   on this path: `coreset_sampling="sensitivity"` swaps the within-stratum draw for the
+   lightweight-coreset importance distribution (oversamples boundary/rare points, proven
+   error bounds), and `reserve_novel_docs=N` force-includes the N most recent outliers at
+   full weight before sampling the rest of the budget (so a fresh theme is never sampled
+   away). `microcluster` selection instead returns recent-raw + summarized-history rows
+   (see the history-summarization note below) and ignores labels.
 2. **Recency fallback** (`coreset_selection="recency"`, or the first recluster when no
    labels exist yet): `recency_weights(n, new_count)` — newest `new_count` docs get
    weight `1.0`, older docs ramp linearly from `floor=0.25` to `1.0`
@@ -465,11 +471,14 @@ Worked example — the cosine-similarity matrix the Hungarian step optimizes ove
 The net guarantee, for **all three flows**: after any `add_batch`, `labels_` holds a
 stable global topic ID (or `-1`) for **every document ever added**.
 
-> **Regime B history summarization.** `alignment.py` also ships
-> [`summarize_embeddings`](alignment.py#L255) (CluStream/BIRCH-style MiniBatchKMeans
-> micro-cluster centroids + counts) so old themes can survive as compact weighted
-> summaries instead of being windowed away. It's the building block for folding history
-> under the cap.
+> **Regime B history summarization.** `coreset_selection="microcluster"` keeps the most
+> recent docs raw and folds older history into CluStream/BIRCH-style micro-clusters via
+> [`microcluster_coreset`](alignment.py), each represented by the **real document nearest
+> its centroid** carrying the micro-cluster's member count as its weight. Using a real
+> representative (not a synthetic centroid) keeps document text available for keyword
+> extraction, and the working-set size is bounded by a constant (`n_recent + k`) regardless
+> of total N — true streaming, rather than a fixed fraction of an ever-growing accumulator.
+> ([`summarize_embeddings`](alignment.py) remains as the lower-level centroid+count helper.)
 
 ### Representation weights (weighted coresets)
 
@@ -484,11 +493,15 @@ fit so the model reflects true corpus mass rather than sample counts:
 | **Topic centroids** ([`_compute_topic_centroids`](../core/model.py#L1005)) | plain mean of member embeddings | `np.average(..., weights=w)` — a point worth 10k docs pulls the centroid accordingly |
 | **Registry mass** ([`_align_and_assign`](cumulative.py#L809)) | raw `topic.size` (sample count) | sum of member weights → drives `_replace`/`_accumulate_registry` running means |
 | **c-TF-IDF keywords** ([`_extract_ctfidf`](../core/keywords.py#L106)) | concatenate topic docs | per-doc term counts scaled by weight, so heavy points dominate proportionally |
+| **Small-cluster pruning** ([`_handle_small_clusters`](../core/clustering.py#L394)) | drop clusters with `< min_cluster_size` **nodes** | drop clusters whose **summed represented mass** is below the threshold, so a large theme that is sparsely sampled is not deleted as "small" |
 
 `TriTopic.fit(..., sample_weights=None)` (the default everywhere else) reproduces the old
-unweighted behaviour exactly — the full-batch path is untouched. Weights are only produced
-by the **stratified** coreset path; the kNN graph itself stays node-unweighted (the
-per-topic floor already guarantees small topics enough nodes to clear `min_cluster_size`).
+unweighted behaviour exactly — the full-batch path is untouched. Weights are produced by
+the **stratified** coreset path (`microcluster` carries micro-cluster member counts too).
+Note: the Leiden objective itself stays node-unweighted — leidenalg's
+`RBConfigurationVertexPartition` uses a degree-based null model and does not accept explicit
+`node_sizes` — so weight-awareness enters via mass-based pruning above plus the weighted
+centroids/keywords, not the partition's modularity term.
 
 ---
 
@@ -716,8 +729,10 @@ pytest tests/test_integration_20ng.py -v -m slow
 | `schedule_every_n_docs` | `None` | For `schedule` trigger. |
 | `max_inmemory_docs` | `300_000` | Working-set cap; above it → Regime B (summarized). |
 | `coreset_size` | `50_000` | Size of the Regime-B coreset/summary. |
-| `coreset_selection` | `"stratified"` | How reduced working sets are sampled: `stratified` (per-topic floor + representation weights; keeps rare topics) or `recency` (legacy recency-weighted random). |
+| `coreset_selection` | `"stratified"` | How reduced working sets are sampled: `stratified` (per-topic floor + representation weights; keeps rare topics), `recency` (legacy recency-weighted random), or `microcluster` (recent docs raw + CluStream/BIRCH summary of old history; size bounded by a constant). |
 | `min_docs_per_topic_in_coreset` | `50` | Stratified per-topic floor — every current topic is guaranteed at least this many representatives (or its full size) in the coreset. |
+| `coreset_sampling` | `"recency"` | Within-stratum distribution for `stratified` selection: `recency` (recency-weighted uniform; legacy) or `sensitivity` (lightweight-coreset importance sampling, Bachem et al. KDD'18 — proven k-means error bounds). |
+| `reserve_novel_docs` | `0` | Force-keep this many of the most recent outlier (`-1`) docs in every coreset at full weight (DenStream-style buffer), so an emerging theme is not sampled away before the next recluster can detect it. `0` disables. |
 | `align_topics` | `True` | Keep stable global topic IDs across epochs (Hungarian alignment). |
 | `align_threshold` | `0.6` | Cosine below which a new topic is treated as genuinely new. |
 | `verbose` | `False` | Print per-batch progress. |

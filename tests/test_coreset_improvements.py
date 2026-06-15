@@ -16,10 +16,16 @@ import numpy as np
 import pytest
 
 from tritopic import TriTopic, TriTopicConfig
+from tritopic.core.clustering import ConsensusLeiden
 from tritopic.core.model import TopicInfo
 from tritopic.cumulative import CumulativeConfig, CumulativeTriTopic
-from tritopic.cumulative.alignment import stratified_coreset
+from tritopic.cumulative.alignment import (
+    microcluster_coreset,
+    sensitivity_weights,
+    stratified_coreset,
+)
 from tritopic.cumulative.evaluation import compare_to_full_batch
+from tritopic.cumulative.strategies import ReclusterContext, _select_reduced
 
 
 # --------------------------------------------------------------------------- #
@@ -73,6 +79,127 @@ class TestStratifiedCoreset:
         idx, probs = stratified_coreset(emb, 50, labels=None, new_count=20)
         assert len(idx) == 50
         assert len(probs) == 50
+
+
+# --------------------------------------------------------------------------- #
+# Sensitivity (lightweight-coreset) sampling
+# --------------------------------------------------------------------------- #
+class TestSensitivitySampling:
+    def test_weights_form_a_distribution_and_favour_outliers(self):
+        # 9 points near the origin, 1 far away: the far point must get the
+        # largest importance (it defines structure), but all stay reachable.
+        emb = np.vstack([np.zeros((9, 3)), np.array([[100.0, 0.0, 0.0]])])
+        q = sensitivity_weights(emb)
+        assert q.sum() == pytest.approx(1.0)
+        assert np.all(q > 0)
+        assert q[-1] == q.max()
+
+    def test_identical_points_are_uniform(self):
+        q = sensitivity_weights(np.ones((5, 4)))
+        assert np.allclose(q, 0.2)
+
+    def test_stratified_sensitivity_keeps_floor_and_weights(self):
+        rng = np.random.default_rng(0)
+        emb = np.vstack([rng.normal(0, 0.1, (1000, 6)), rng.normal(5, 0.1, (10, 6))])
+        labels = np.array([0] * 1000 + [1] * 10)
+        idx, probs = stratified_coreset(
+            emb, 300, labels, new_count=50, min_per_cluster=5, sampling="sensitivity"
+        )
+        assert len(idx) <= 300 and len(idx) == len(probs)
+        assert np.all((probs > 0) & (probs <= 1.0))
+        assert (labels[idx] == 1).sum() >= 5            # rare-topic floor honoured
+
+
+# --------------------------------------------------------------------------- #
+# Micro-cluster (CluStream/BIRCH) hybrid coreset
+# --------------------------------------------------------------------------- #
+class TestMicroclusterCoreset:
+    def test_size_bounded_and_mass_conserved(self):
+        rng = np.random.default_rng(1)
+        emb = rng.normal(size=(500, 8))
+        idx, w = microcluster_coreset(emb, n_recent=40, k=30)
+        assert len(idx) <= 70                            # bounded by n_recent + k
+        assert len(idx) == len(w)
+        assert w.sum() == pytest.approx(500)             # total represented mass == N
+        assert np.array_equal(idx, np.sort(idx))
+
+    def test_recent_docs_kept_raw_at_weight_one(self):
+        rng = np.random.default_rng(2)
+        emb = rng.normal(size=(300, 5))
+        idx, w = microcluster_coreset(emb, n_recent=50, k=20)
+        recent = set(range(250, 300))
+        kept_recent = [i for i in idx if int(i) in recent]
+        assert len(kept_recent) == 50                    # every recent doc retained
+        assert all(w[list(idx).index(i)] == 1.0 for i in kept_recent)
+
+    def test_indices_are_real_documents(self):
+        # Representatives must be actual rows (so document text exists downstream).
+        emb = np.random.default_rng(3).normal(size=(120, 4))
+        idx, _ = microcluster_coreset(emb, n_recent=20, k=15)
+        assert idx.min() >= 0 and idx.max() < 120
+
+
+# --------------------------------------------------------------------------- #
+# Guaranteed novelty/outlier retention
+# --------------------------------------------------------------------------- #
+class TestNoveltyReservation:
+    def _ctx(self, emb, labels, reserve):
+        return ReclusterContext(
+            documents=[f"d{i}" for i in range(len(emb))],
+            embeddings=emb,
+            new_count=20,
+            max_inmemory_docs=10_000,
+            coreset_size=100,
+            random_state=0,
+            labels=labels,
+            coreset_selection="stratified",
+            min_per_cluster=5,
+            reserve_novel=reserve,
+        )
+
+    def test_recent_outliers_forced_in_at_full_weight(self):
+        rng = np.random.default_rng(0)
+        emb = rng.normal(size=(400, 6))
+        labels = np.array([0] * 200 + [1] * 190 + [-1] * 10)  # 10 recent outliers
+        idx, w = _select_reduced(self._ctx(emb, labels, reserve=10), size=80)
+        outlier_rows = set(range(390, 400))
+        kept = outlier_rows & set(int(i) for i in idx)
+        assert kept == outlier_rows                       # all reserved
+        wmap = {int(i): wt for i, wt in zip(idx, w)}
+        assert all(wmap[i] == 1.0 for i in outlier_rows)  # at full weight
+
+    def test_zero_reserve_matches_plain_stratified(self):
+        rng = np.random.default_rng(0)
+        emb = rng.normal(size=(300, 6))
+        labels = np.array([0] * 150 + [1] * 145 + [-1] * 5)
+        idx, _ = _select_reduced(self._ctx(emb, labels, reserve=0), size=80)
+        assert len(idx) <= 80
+
+
+# --------------------------------------------------------------------------- #
+# Mass-based small-cluster pruning (weight-aware Leiden post-processing)
+# --------------------------------------------------------------------------- #
+class TestMassBasedPruning:
+    def _graph(self):
+        import igraph as ig
+
+        # Two blobs: A (5 nodes) and B (3 nodes), thinly bridged.
+        edges = [(0, 1), (0, 2), (1, 2), (2, 3), (3, 4), (0, 4),
+                 (5, 6), (6, 7), (5, 7)]
+        g = ig.Graph(n=8, edges=edges, directed=False)
+        g.es["weight"] = [1.0] * g.ecount()
+        return g
+
+    def test_small_cluster_pruned_unweighted(self):
+        cl = ConsensusLeiden(resolution=0.5, n_runs=3, random_state=0)
+        labels = cl.fit_predict(self._graph(), min_cluster_size=4)
+        assert set(labels[5:8]) == {-1}                   # B (3 nodes) pruned
+
+    def test_small_cluster_survives_when_mass_clears_threshold(self):
+        cl = ConsensusLeiden(resolution=0.5, n_runs=3, random_state=0)
+        w = np.array([1, 1, 1, 1, 1, 10, 10, 10], dtype=float)  # B mass = 30
+        labels = cl.fit_predict(self._graph(), min_cluster_size=4, node_weights=w)
+        assert -1 not in set(labels[5:8])                 # B survives on mass
 
 
 # --------------------------------------------------------------------------- #
