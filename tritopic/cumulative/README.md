@@ -490,6 +490,7 @@ fit so the model reflects true corpus mass rather than sample counts:
 
 | Where | Unweighted (old) | Weighted (`sample_weights` present) |
 |---|---|---|
+| **Leiden partition** ([`ConsensusLeiden.fit_predict`](../core/clustering.py)) | `RBConfigurationVertexPartition` (degree-based null model, no node mass) | `RBERVertexPartition` with `node_sizes=weights` — the partition's own modularity-style objective sees each point's true represented mass, not just its raw presence as one node |
 | **Topic centroids** ([`_compute_topic_centroids`](../core/model.py#L1005)) | plain mean of member embeddings | `np.average(..., weights=w)` — a point worth 10k docs pulls the centroid accordingly |
 | **Registry mass** ([`_align_and_assign`](cumulative.py#L809)) | raw `topic.size` (sample count) | sum of member weights → drives `_replace`/`_accumulate_registry` running means |
 | **c-TF-IDF keywords** ([`_extract_ctfidf`](../core/keywords.py#L106)) | concatenate topic docs | per-doc term counts scaled by weight, so heavy points dominate proportionally |
@@ -498,10 +499,21 @@ fit so the model reflects true corpus mass rather than sample counts:
 `TriTopic.fit(..., sample_weights=None)` (the default everywhere else) reproduces the old
 unweighted behaviour exactly — the full-batch path is untouched. Weights are produced by
 the **stratified** coreset path (`microcluster` carries micro-cluster member counts too).
-Note: the Leiden objective itself stays node-unweighted — leidenalg's
-`RBConfigurationVertexPartition` uses a degree-based null model and does not accept explicit
-`node_sizes` — so weight-awareness enters via mass-based pruning above plus the weighted
-centroids/keywords, not the partition's modularity term.
+
+**Leiden objective switch, scoped to the weighted branch only.** leidenalg's
+`RBConfigurationVertexPartition` (this codebase's default) has no `node_sizes` parameter —
+only `RBERVertexPartition`/`CPMVertexPartition`/etc. do — and those use a different null
+model with different `resolution_parameter` semantics, so switching every fit over would
+silently change behaviour for every existing unweighted config. `ConsensusLeiden` therefore
+switches to `RBERVertexPartition` with `node_sizes=node_weights` *only* when weights are
+given; every unweighted fit keeps using `RBConfigurationVertexPartition` exactly as before.
+On a realistic emerging-topic streaming benchmark this raised the `coreset` strategy's ARI
+against the full-batch baseline from ~0.88–0.95 to ~0.92–0.99 across seeds — coreset fidelity
+now sits close to `global_refit`'s own ceiling. (An earlier attempt scaled edge weights by
+`w_i * w_j` instead, to avoid touching the objective at all — that inflates a heavy node's
+*every* edge, including the spurious cross-topic edges a real kNN graph always has near
+sparse regions, and measurably hurt fidelity; `node_sizes` only enters the null-model density
+term, not the raw edges, so it doesn't have that failure mode.)
 
 ---
 

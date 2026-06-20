@@ -109,30 +109,53 @@ class ConsensusLeiden:
         res = resolution or self.resolution
         n_nodes = graph.vcount()
 
-        # Represented mass per node, used for mass-based small-cluster pruning
-        # (see _handle_small_clusters). NOTE: leidenalg's
-        # RBConfigurationVertexPartition (this codebase's objective) uses a
-        # degree-based configuration null model and does not accept explicit
-        # node_sizes — only CPM/RBER/Significance/Surprise do — so the weight
-        # cannot be injected into the partition objective without switching
-        # objectives (which would change resolution semantics everywhere).
-        # Weight-awareness therefore enters via pruning here plus the weighted
-        # centroids/keywords in TriTopic.
+        # Represented mass per node: used for mass-based small-cluster pruning
+        # (see _handle_small_clusters) AND, below, for the partition objective
+        # itself. leidenalg's RBConfigurationVertexPartition (this codebase's
+        # default, degree-based configuration null model) has no node_sizes
+        # parameter, so it can't see node mass directly. RBERVertexPartition
+        # (Erdős–Rényi null model) does accept node_sizes, but its resolution
+        # semantics differ from RBConfiguration's — switching every fit over
+        # would silently change behaviour for every existing unweighted config.
+        # We avoid that by switching objective *only* when node_weights is
+        # given (i.e. only on the already-distinct weighted-coreset branch);
+        # every unweighted fit keeps using RBConfigurationVertexPartition
+        # exactly as before, so resolution semantics there are untouched.
+        #
+        # An earlier attempt scaled edge weights by w_i * w_j instead (a
+        # graph-contraction approximation) to avoid touching the objective at
+        # all, but that inflates a heavy node's *every* edge, including the
+        # spurious cross-topic edges a real kNN graph always has near sparse
+        # (exactly the under-sampled, heavily-weighted) regions — which made
+        # coreset fidelity measurably worse on realistic data. node_sizes only
+        # enters RBER's null-model density term, not the raw edges, so it
+        # doesn't amplify that noise; benchmarked clearly better.
         self._node_weights = (
             np.asarray(node_weights, dtype=float) if node_weights is not None else None
         )
+        use_node_sizes = self._node_weights is not None and len(self._node_weights) == n_nodes
 
         from joblib import Parallel, delayed
 
         def _run_one(seed: int) -> np.ndarray:
             import leidenalg as _la
-            part = _la.find_partition(
-                graph,
-                _la.RBConfigurationVertexPartition,
-                weights="weight",
-                resolution_parameter=res,
-                seed=seed,
-            )
+            if use_node_sizes:
+                part = _la.find_partition(
+                    graph,
+                    _la.RBERVertexPartition,
+                    weights="weight",
+                    node_sizes=self._node_weights.tolist(),
+                    resolution_parameter=res,
+                    seed=seed,
+                )
+            else:
+                part = _la.find_partition(
+                    graph,
+                    _la.RBConfigurationVertexPartition,
+                    weights="weight",
+                    resolution_parameter=res,
+                    seed=seed,
+                )
             return np.array(part.membership)
 
         # prefer="threads" so the GIL doesn't block leidenalg's C backend, but
@@ -379,14 +402,28 @@ class ConsensusLeiden:
             del edge_array
             g.es["weight"] = keep_weights
             del keep_weights
+            # Same node_sizes-on-RBER swap as the per-run partition above:
+            # keeps a heavily-weighted coreset point's community from being
+            # washed out in the consensus step too.
+            node_weights = getattr(self, "_node_weights", None)
             with step_timer(f"leiden-consensus-run ({n_edges:,} edges)", verbose=self.verbose, indent=15):
-                part = la.find_partition(
-                    g,
-                    la.RBConfigurationVertexPartition,
-                    weights="weight",
-                    resolution_parameter=self.resolution,
-                    seed=self.random_state,
-                )
+                if node_weights is not None and len(node_weights) == n_nodes:
+                    part = la.find_partition(
+                        g,
+                        la.RBERVertexPartition,
+                        weights="weight",
+                        node_sizes=node_weights.tolist(),
+                        resolution_parameter=self.resolution,
+                        seed=self.random_state,
+                    )
+                else:
+                    part = la.find_partition(
+                        g,
+                        la.RBConfigurationVertexPartition,
+                        weights="weight",
+                        resolution_parameter=self.resolution,
+                        seed=self.random_state,
+                    )
             labels = np.asarray(part.membership)
             del part, g
             return labels

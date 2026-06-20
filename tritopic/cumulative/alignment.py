@@ -351,7 +351,12 @@ def sensitivity_weights(embeddings: np.ndarray) -> np.ndarray:
     rare structure — get sampled more, while the uniform ½ term keeps every point
     reachable. Sampling proportional to ``q`` with the matching unbiased coreset
     weight ``1/(m·q(x))`` yields multiplicative ``(1±ε)`` k-means-style error
-    bounds, versus none for uniform sampling.
+    bounds, versus none for uniform sampling. The resulting weight now also
+    feeds the Leiden partition objective itself, as ``node_sizes`` on
+    ``RBERVertexPartition`` (see
+    :meth:`~tritopic.core.clustering.ConsensusLeiden.fit_predict`), not just
+    pruning/centroids/keywords — without that, the (1±ε) bound on the sample
+    wouldn't carry through to the communities Leiden actually draws.
 
     Returns a probability vector (sums to 1) over the rows of *embeddings*.
     """
@@ -430,6 +435,12 @@ def stratified_coreset(
     representation weight ``1 / p_i``. Floors are honoured when *size* is large
     enough to admit them; otherwise allocations are scaled down to fit the budget.
     Falls back to recency sampling when no labels.
+
+    That ``1 / p_i`` weight is passed through to ``TriTopic.fit(sample_weights=...)``
+    and from there into :meth:`~tritopic.core.clustering.ConsensusLeiden.fit_predict`,
+    where it becomes ``node_sizes`` for ``RBERVertexPartition`` so the Leiden
+    partition objective — not just pruning/centroids/keywords — sees each
+    point's true representation mass.
 
     Returns
     -------

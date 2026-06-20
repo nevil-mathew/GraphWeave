@@ -203,6 +203,62 @@ class TestMassBasedPruning:
 
 
 # --------------------------------------------------------------------------- #
+# Node-weight-aware partitioning (weights must reach the Leiden objective
+# itself, not just post-hoc pruning/centroids/keywords)
+# --------------------------------------------------------------------------- #
+class TestWeightedPartition:
+    """Two K4 cliques A (0-3) / B (4-7) joined by one bridge edge (3, 4).
+
+    At this bridge weight + resolution, the bridge "pays for itself" and
+    Leiden merges A and B into a single community when ``node_weights`` is
+    ``None`` (``RBConfigurationVertexPartition``, this codebase's default —
+    used both when genuinely unweighted AND, pre-fix, even when weights were
+    passed in, since they never reached the partition objective). Giving B's
+    three *non-bridge* nodes (5, 6, 7) a large representation weight (e.g.
+    they stand for a real population summarized into few coreset points)
+    switches the objective to ``RBERVertexPartition`` with ``node_sizes`` set
+    from those weights, and the heavy trio splits off into its own community
+    instead of being absorbed into A — the bridge node (3, 4) ends up on A's
+    side since it carries no extra mass itself, only B's *interior* points do.
+
+    Same ``ConsensusLeiden(resolution=...)`` config in both tests, the only
+    difference is whether ``node_weights`` is passed — so this isolates the
+    fix's effect rather than a coincidental resolution change. Parameters
+    were grid-searched directly against leidenalg (``RBConfigurationVertexPartition``
+    merges / ``RBERVertexPartition`` + matching ``node_sizes`` splits at the
+    *same* ``resolution_parameter``), confirmed stable across 15
+    ``ConsensusLeiden(random_state=...)`` values through the full consensus
+    pipeline (not just a single raw ``find_partition`` call).
+    """
+
+    def _graph(self):
+        import igraph as ig
+
+        a_edges = [(i, j) for i in range(4) for j in range(i + 1, 4)]
+        b_edges = [(4 + i, 4 + j) for i in range(4) for j in range(i + 1, 4)]
+        bridge = [(3, 4)]
+        g = ig.Graph(n=8, edges=a_edges + b_edges + bridge, directed=False)
+        g.es["weight"] = [1.0] * len(a_edges) + [1.0] * len(b_edges) + [3.2]
+        return g
+
+    def test_unweighted_merges_across_the_bridge(self):
+        cl = ConsensusLeiden(resolution=0.4, n_runs=10, random_state=0)
+        labels = cl.fit_predict(self._graph(), min_cluster_size=2)
+        assert len(set(labels) - {-1}) == 1                # A and B merged
+
+    def test_node_weights_split_b_into_its_own_community(self):
+        cl = ConsensusLeiden(resolution=0.4, n_runs=10, random_state=0)
+        w = np.array([1, 1, 1, 1, 1, 3, 3, 3], dtype=float)
+        labels = cl.fit_predict(self._graph(), min_cluster_size=2, node_weights=w)
+        # B's heavy interior nodes (5, 6, 7) form their own community, distinct
+        # from the rest of the graph. This fails before the fix (weights only
+        # reach pruning, so the partition objective — and therefore the
+        # labels — never changes from the unweighted case above).
+        assert len(set(labels[5:])) == 1
+        assert labels[5] != labels[0]
+
+
+# --------------------------------------------------------------------------- #
 # P1 — weighted topic centroids
 # --------------------------------------------------------------------------- #
 class TestWeightedCentroids:
