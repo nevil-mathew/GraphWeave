@@ -1794,6 +1794,90 @@ class TriTopic:
 
         return self
 
+    def tune_resolution_with_llm(
+        self,
+        labeler,
+        resolution_range: tuple[float, float] = (0.1, 2.0),
+        n_candidates: int = 6,
+        n_triplets: int | None = None,
+        random_state: int = 42,
+        batch_size: int = 8,
+    ) -> "TriTopic":
+        """Calibrate the Leiden resolution using LLM-judged triplet agreement.
+
+        Implements the triplet-query granularity calibration from ClusterLLM
+        (Zhang, Wang & Shang, EMNLP 2023): several candidate resolutions are
+        scored by how well their (cheap, single-pass) Leiden partitions agree
+        with an LLM's judgments on sampled (anchor, same-cluster, different-
+        cluster) document triplets. The winning resolution is then re-fit
+        with a full consensus Leiden run and all downstream topic state
+        (keywords, centroids, representative docs, soft assignments) is
+        refreshed.
+
+        This is a third, opt-in path alongside modularity-maximization and
+        binary-search-to-target-count (see
+        ``ConsensusLeiden.find_optimal_resolution``); it does not replace or
+        alter either of those and is never invoked automatically.
+
+        Parameters
+        ----------
+        labeler : LLMLabeler
+            Must expose ``call_structured``. Provider, model, caching, etc.
+            are all taken from this instance.
+        resolution_range : tuple[float, float]
+            Sweep range for candidate resolutions. Default ``(0.1, 2.0)``.
+        n_candidates : int
+            Number of candidate resolutions to score. Default 6.
+        n_triplets : int, optional
+            Number of triplets to query. ``None`` (default) scales with
+            corpus size (~24 for small corpora up to ~120 for 50K+ docs).
+        random_state : int
+            Seed for triplet sampling and candidate Leiden runs. Default 42.
+        batch_size : int
+            Triplets per LLM call. Default 8.
+
+        Returns
+        -------
+        self : TriTopic
+
+        Examples
+        --------
+        >>> from tritopic import TriTopic, LLMLabeler
+        >>> model = TriTopic().fit(documents)
+        >>> labeler = LLMLabeler(provider="anthropic", api_key="...", model="claude-haiku-4-5")
+        >>> model.tune_resolution_with_llm(labeler)
+        """
+        if not self._is_fitted:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        from tritopic.labeling.llm_granularity import llm_select_resolution
+
+        best_res = llm_select_resolution(
+            labeler,
+            self.documents_,
+            self.graph_,
+            self.embeddings_,
+            resolution_range=resolution_range,
+            n_candidates=n_candidates,
+            n_triplets=n_triplets,
+            random_state=random_state,
+            batch_size=batch_size,
+        )
+
+        self.labels_ = self._clusterer.fit_predict(
+            self.graph_,
+            min_cluster_size=self._effective_min_cluster_size(len(self.embeddings_)),
+            resolution=best_res,
+            node_weights=self.sample_weights_,
+        )
+
+        self._keyword_extractor.reset()
+        self._extract_topic_info(self.documents_)
+        self._compute_topic_centroids()
+        self._compute_probabilities()
+
+        return self
+
     def get_topic_info(self) -> pd.DataFrame:
         """
         Get a DataFrame with topic information.
