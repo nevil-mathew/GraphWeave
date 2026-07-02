@@ -32,6 +32,7 @@ A state-of-the-art topic modeling library that fuses semantic embeddings, lexica
 - [Topic Merging](#topic-merging)
 - [Keyword Extraction](#keyword-extraction)
 - [LLM-Powered Labels](#llm-powered-labels)
+- [LLM-Guided Granularity Calibration](#llm-guided-granularity-calibration)
 - [Visualizations](#visualizations)
 - [Evaluation](#evaluation)
 - [Advanced Usage](#advanced-usage)
@@ -1043,6 +1044,42 @@ model.generate_labels(labeler, dedup_passes=2)  # extra cleanup pass for tricky 
 ### Response caching
 
 `LLMLabeler` caches each response by prompt hash, so re-running `generate_labels` (or the cleanup pass) does not re-pay for identical calls. Disable with `cache=False`.
+
+---
+
+## LLM-Guided Granularity Calibration
+
+An optional third way to pick the Leiden `resolution` parameter, alongside modularity-maximization (the default linear sweep) and binary-search-to-a-target-topic-count (`n_topics=<int>`). This path asks an LLM to judge clustering granularity directly, following the triplet-query approach from **ClusterLLM** (Zhang, Wang & Shang, *"ClusterLLM: Large Language Models as a Guide for Text Clustering"*, EMNLP 2023).
+
+The idea: sample `(A, B, C)` document triplets where `B` is A's nearest neighbor in the same cluster and `C` is A's nearest neighbor in a different cluster (under a reference partition), then ask the LLM "does A belong with B or with C?" for each triplet. Several candidate resolutions are scored by how well their partitions agree with the LLM's answers, and the best-agreeing resolution is kept.
+
+This is **fully opt-in** — it is never invoked by `fit()` or by `n_topics=<int>`, and it does not change the behavior of the existing resolution-search paths.
+
+```python
+from tritopic import TriTopic, LLMLabeler
+
+model = TriTopic().fit(documents)
+
+labeler = LLMLabeler(provider="anthropic", api_key="...", model="claude-haiku-4-5")
+model.tune_resolution_with_llm(labeler)
+
+print(f"Topics after calibration: {len([t for t in model.topics_ if t.topic_id != -1])}")
+```
+
+By default, 6 candidate resolutions are scored (geometrically spaced across `resolution_range=(0.1, 2.0)`) against a corpus-size-scaled number of triplets (~24 for small corpora, scaling up to ~80-120 for 50K+ document corpora), sent to the LLM in batches of 8. All of this is configurable:
+
+```python
+model.tune_resolution_with_llm(
+    labeler,
+    resolution_range=(0.05, 3.0),
+    n_candidates=8,
+    n_triplets=60,     # override the corpus-size default
+    batch_size=8,
+    random_state=42,
+)
+```
+
+**Cost**: each triplet costs one small batched LLM call slice (~8 triplets per call). On Claude Haiku 4.5, a full run costs roughly **$0.01 for a small corpus (~24 triplets) up to ~$0.15 for a large one (~500 triplets)** — cheap enough to run after every `fit()` on a new dataset while you're still tuning `resolution_range`.
 
 ---
 
