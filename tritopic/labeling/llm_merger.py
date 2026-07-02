@@ -119,6 +119,14 @@ def _parse_merge_response(
     """
     groups: list[dict] = []
 
+    if not raw or not raw.strip():
+        warnings.warn(
+            "llm_merge_topics: empty LLM response — returning all topics as singletons (no merge).",
+            UserWarning,
+            stacklevel=4,
+        )
+        return [{"label": "", "topic_ids": [tid]} for tid in sorted(valid_ids)]
+
     def _try_parse(text: str) -> list[dict] | None:
         try:
             data = json.loads(text)

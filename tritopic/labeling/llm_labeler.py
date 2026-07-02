@@ -542,7 +542,11 @@ Respond ONLY with this exact JSON format, no other text:
         if self._json_object_mode:
             kwargs["response_format"] = {"type": "json_object"}
         response = self._client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        if content is None:
+            finish_reason = response.choices[0].finish_reason
+            raise ValueError(f"empty completion from {self.model} (finish_reason={finish_reason!r})")
+        return content
 
     def _call_google(self, system_prompt: str, user_prompt: str) -> str:
         """Call Google Gemini API via google-genai with structured JSON output."""
