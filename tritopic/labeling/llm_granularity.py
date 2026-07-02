@@ -37,20 +37,45 @@ def _candidate_resolutions(
     return list(np.geomspace(lo, hi, n_candidates))
 
 
-def _partition_at_resolution(graph, resolution: float, random_state: int) -> np.ndarray:
+def _partition_at_resolution(
+    graph,
+    resolution: float,
+    random_state: int,
+    node_weights: np.ndarray | None = None,
+) -> np.ndarray:
     """One single (non-consensus) Leiden run at *resolution* — cheap candidate
     scoring only. The final re-fit at the winning resolution is a full
     ``ConsensusLeiden.fit_predict`` consensus run performed by the caller.
+
+    Mirrors ``ConsensusLeiden.fit_predict``'s choice of partition objective
+    (``clustering.py``): when *node_weights* is given (weighted-coreset
+    models), uses ``RBERVertexPartition`` with ``node_sizes`` so candidate
+    scoring reflects the same objective as the final consensus re-fit;
+    otherwise (the default, unweighted path) uses
+    ``RBConfigurationVertexPartition`` exactly as before.
     """
     import leidenalg as la
 
-    partition = la.find_partition(
-        graph,
-        la.RBConfigurationVertexPartition,
-        weights="weight",
-        resolution_parameter=resolution,
-        seed=random_state,
-    )
+    weights_arr = np.asarray(node_weights, dtype=float) if node_weights is not None else None
+    use_node_sizes = weights_arr is not None and len(weights_arr) == graph.vcount()
+
+    if use_node_sizes:
+        partition = la.find_partition(
+            graph,
+            la.RBERVertexPartition,
+            weights="weight",
+            node_sizes=weights_arr.tolist(),
+            resolution_parameter=resolution,
+            seed=random_state,
+        )
+    else:
+        partition = la.find_partition(
+            graph,
+            la.RBConfigurationVertexPartition,
+            weights="weight",
+            resolution_parameter=resolution,
+            seed=random_state,
+        )
     return np.array(partition.membership)
 
 
@@ -99,11 +124,11 @@ def _sample_triplets(
         anchor_vec = embeddings[a : a + 1]
 
         same_nn = NearestNeighbors(n_neighbors=1, metric="cosine").fit(embeddings[same_idx])
-        same_dist, same_pos = same_nn.kneighbors(anchor_vec)
+        _, same_pos = same_nn.kneighbors(anchor_vec)
         b = int(same_idx[same_pos[0, 0]])
 
         diff_nn = NearestNeighbors(n_neighbors=1, metric="cosine").fit(embeddings[diff_idx])
-        diff_dist, diff_pos = diff_nn.kneighbors(anchor_vec)
+        _, diff_pos = diff_nn.kneighbors(anchor_vec)
         c = int(diff_idx[diff_pos[0, 0]])
 
         triplets.append((int(a), b, c))
@@ -260,8 +285,12 @@ def _triplet_agreement(
     no informative signal about the B-vs-C preference, so the triplet is
     skipped for this candidate rather than counted as a disagreement.
 
-    Score = agreements / informative-count; 0.0 if no triplet was
-    informative for this candidate.
+    A candidate with zero informative triplets is genuinely degenerate
+    relative to the sampled triplets and scores 0.0. Otherwise the score is
+    Laplace/add-one smoothed — ``(agreements + 1) / (informative-count + 2)``
+    — rather than a raw proportion, so a candidate informative for only one
+    or two triplets can't outrank one informative across many triplets at a
+    slightly lower (but statistically much more reliable) agreement rate.
     """
     agree = 0
     counted = 0
@@ -274,7 +303,9 @@ def _triplet_agreement(
         implied = "B" if same_b else "C"
         if implied == ans:
             agree += 1
-    return agree / counted if counted > 0 else 0.0
+    if counted == 0:
+        return 0.0
+    return (agree + 1) / (counted + 2)
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +339,7 @@ def llm_select_resolution(
     n_triplets: int | None = None,
     random_state: int = 42,
     batch_size: int = 8,
+    node_weights: np.ndarray | None = None,
 ) -> float:
     """Select a Leiden resolution via LLM-judged triplet agreement (ClusterLLM).
 
@@ -339,14 +371,22 @@ def llm_select_resolution(
     resolution_range : tuple[float, float]
         Sweep range for candidate resolutions.
     n_candidates : int
-        Number of candidate resolutions to score.
+        Number of candidate resolutions to score. Must be >= 1.
     n_triplets : int, optional
         Number of triplets to sample and send to the LLM. ``None`` uses
         the corpus-size-scaled default (see :func:`_default_n_triplets`).
     random_state : int
         Seed for triplet sampling and single-pass Leiden runs.
     batch_size : int
-        Triplets per LLM call.
+        Triplets per LLM call. Must be >= 1.
+    node_weights : np.ndarray, optional
+        Per-node representation weight (e.g. how many real documents a
+        coreset point stands for), aligned row-wise with *graph*'s
+        vertices. When given, candidate partitions use the same
+        ``RBERVertexPartition`` + ``node_sizes`` objective as
+        ``ConsensusLeiden.fit_predict`` would use for the final re-fit, so
+        candidate scoring matches the weighted Leiden objective. ``None``
+        (default) reproduces the unweighted behaviour exactly.
 
     Returns
     -------
@@ -354,8 +394,16 @@ def llm_select_resolution(
         The winning resolution (one of the exact candidate values
         generated by :func:`_candidate_resolutions`).
     """
+    if n_candidates <= 0:
+        raise ValueError(f"n_candidates must be >= 1, got {n_candidates}")
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
     candidates = _candidate_resolutions(resolution_range, n_candidates)
-    partitions = [_partition_at_resolution(graph, res, random_state) for res in candidates]
+    partitions = [
+        _partition_at_resolution(graph, res, random_state, node_weights=node_weights)
+        for res in candidates
+    ]
 
     reference_labels = partitions[len(partitions) // 2]
 
@@ -385,5 +433,22 @@ def llm_select_resolution(
         llm_answers.extend(_parse_triplet_response(raw, len(batch)))
 
     scores = [_triplet_agreement(labels, triplets, llm_answers) for labels in partitions]
-    best_idx = int(np.argmax(scores))
+    max_score = max(scores)
+    mid = len(candidates) // 2
+
+    if max_score == 0.0:
+        # No candidate showed any informative signal at all — an explicit,
+        # documented fallback rather than np.argmax's implicit first-index
+        # tie-break, matching the no-triplets-sampled fallback above.
+        warnings.warn(
+            "llm_select_resolution: no candidate resolution showed a clear "
+            "preference (all triplet judgments were uninformative) — "
+            "falling back to the middle candidate resolution.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return float(candidates[mid])
+
+    tied = [i for i, s in enumerate(scores) if s == max_score]
+    best_idx = min(tied, key=lambda i: abs(i - mid))
     return float(candidates[best_idx])

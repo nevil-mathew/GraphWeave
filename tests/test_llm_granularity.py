@@ -13,9 +13,11 @@ import numpy as np
 import pytest
 
 from tritopic import TriTopic, TriTopicConfig
+from tritopic.core.clustering import ConsensusLeiden
 from tritopic.labeling.llm_granularity import (
     _sample_triplets,
     _candidate_resolutions,
+    _partition_at_resolution,
     _triplet_agreement,
     _parse_triplet_response,
     _default_n_triplets,
@@ -125,12 +127,13 @@ class TestTripletAgreement:
     def test_perfect_agreement(self):
         labels = np.array([0, 0, 1])  # a=0,b=1 same cluster; c=2 different
         triplets = [(0, 1, 2)]
-        assert _triplet_agreement(labels, triplets, ["B"]) == 1.0
+        # Laplace-smoothed: (agree+1)/(counted+2) = 2/3, not a raw 1.0.
+        assert _triplet_agreement(labels, triplets, ["B"]) == pytest.approx(2 / 3)
 
     def test_perfect_disagreement(self):
         labels = np.array([0, 0, 1])
         triplets = [(0, 1, 2)]
-        assert _triplet_agreement(labels, triplets, ["C"]) == 0.0
+        assert _triplet_agreement(labels, triplets, ["C"]) == pytest.approx(1 / 3)
 
     def test_uninformative_triplet_skipped_both_merged(self):
         labels = np.array([0, 0, 0])  # a, b, c all in same cluster: uninformative
@@ -148,7 +151,64 @@ class TestTripletAgreement:
         # triplet2: a=2(lbl1), b=0(lbl0, diff), c=1(lbl0, diff) -> both diff, uninformative
         triplets = [(0, 1, 2), (2, 0, 1)]
         answers = ["B", "C"]
-        assert _triplet_agreement(labels, triplets, answers) == 1.0
+        assert _triplet_agreement(labels, triplets, answers) == pytest.approx(2 / 3)
+
+    def test_sparse_perfect_match_does_not_outrank_broad_high_agreement(self):
+        # Candidate A: informative on exactly 1 triplet, agrees on it (naive 1.0).
+        labels_a = np.array([0, 0, 1])
+        triplets_a = [(0, 1, 2)]
+        score_a = _triplet_agreement(labels_a, triplets_a, ["B"])
+
+        # Candidate B: informative on 9 triplets, agrees on 8 (naive ~0.889).
+        labels_b = np.array([0, 0, 1, 1, 1, 1, 1, 1, 1, 1])
+        triplets_b = [(0, 1, i) for i in range(2, 10)] + [(0, 1, 2)]
+        answers_b = ["B"] * 8 + ["C"]  # 8/9 agree
+        score_b = _triplet_agreement(labels_b, triplets_b, answers_b)
+
+        assert score_b > score_a
+
+
+# --------------------------------------------------------------------------- #
+# _partition_at_resolution node_weights threading
+# --------------------------------------------------------------------------- #
+class TestPartitionAtResolutionNodeWeights:
+    """Reuses the exact fixture/parameters from
+    tests/test_coreset_improvements.py::TestWeightedPartition, which are
+    already proven to flip RBConfigurationVertexPartition (merges across
+    the bridge) vs RBERVertexPartition+node_sizes (splits the heavy trio
+    off) at resolution=0.4. This proves _partition_at_resolution's
+    node_weights branch matches ConsensusLeiden.fit_predict's objective.
+    """
+
+    def _graph(self):
+        import igraph as ig
+
+        a_edges = [(i, j) for i in range(4) for j in range(i + 1, 4)]
+        b_edges = [(4 + i, 4 + j) for i in range(4) for j in range(i + 1, 4)]
+        bridge = [(3, 4)]
+        g = ig.Graph(n=8, edges=a_edges + b_edges + bridge, directed=False)
+        g.es["weight"] = [1.0] * len(a_edges) + [1.0] * len(b_edges) + [3.2]
+        return g
+
+    def test_unweighted_merges_across_the_bridge(self):
+        labels = _partition_at_resolution(self._graph(), 0.4, random_state=0)
+        assert len(set(labels)) == 1  # A and B merged into one community
+
+    def test_node_weights_split_b_into_its_own_community(self):
+        w = np.array([1, 1, 1, 1, 1, 3, 3, 3], dtype=float)
+        labels = _partition_at_resolution(self._graph(), 0.4, random_state=0, node_weights=w)
+        assert len(set(labels[5:])) == 1
+        assert labels[5] != labels[0]
+
+    def test_matches_consensus_leiden_weighted_objective(self):
+        """Sanity cross-check: the same node_weights make ConsensusLeiden.fit_predict
+        pick the same objective family (RBER) as _partition_at_resolution."""
+        w = np.array([1, 1, 1, 1, 1, 3, 3, 3], dtype=float)
+        cl = ConsensusLeiden(resolution=0.4, n_runs=3, random_state=0)
+        consensus_labels = cl.fit_predict(self._graph(), min_cluster_size=2, node_weights=w)
+        single_labels = _partition_at_resolution(self._graph(), 0.4, random_state=0, node_weights=w)
+        assert len(set(consensus_labels[5:]) - {-1}) == 1
+        assert len(set(single_labels[5:])) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -208,6 +268,97 @@ class TestDefaultNTriplets:
 
 
 # --------------------------------------------------------------------------- #
+# llm_select_resolution input validation
+# --------------------------------------------------------------------------- #
+class TestLlmSelectResolutionValidation:
+    def _labels_embeddings(self):
+        rng = np.random.default_rng(0)
+        centers = rng.normal(size=(3, 8))
+        centers /= np.linalg.norm(centers, axis=1, keepdims=True)
+        embs = np.vstack([
+            centers[t] + 0.05 * rng.normal(size=(20, 8)) for t in range(3)
+        ])
+        embs /= np.linalg.norm(embs, axis=1, keepdims=True)
+        return embs.astype(np.float32)
+
+    def _tiny_graph(self):
+        import igraph as ig
+
+        edges = [(i, j) for i in range(4) for j in range(i + 1, 4)]
+        edges += [(4 + i, 4 + j) for i in range(4) for j in range(i + 1, 4)]
+        edges += [(3, 4)]
+        g = ig.Graph(n=8, edges=edges, directed=False)
+        g.es["weight"] = [1.0] * g.ecount()
+        return g
+
+    def test_n_candidates_zero_raises_value_error(self):
+        embs = self._labels_embeddings()[:8]
+        docs = [f"doc {i}" for i in range(8)]
+        with pytest.raises(ValueError, match="n_candidates"):
+            llm_select_resolution(
+                AllBLabeler(), docs, self._tiny_graph(), embs, n_candidates=0
+            )
+
+    def test_batch_size_zero_raises_value_error(self):
+        embs = self._labels_embeddings()[:8]
+        docs = [f"doc {i}" for i in range(8)]
+        with pytest.raises(ValueError, match="batch_size"):
+            llm_select_resolution(
+                AllBLabeler(), docs, self._tiny_graph(), embs, batch_size=0
+            )
+
+
+# --------------------------------------------------------------------------- #
+# Tie / no-signal fallback
+# --------------------------------------------------------------------------- #
+class TestNoSignalFallback:
+    def test_all_zero_scores_falls_back_to_middle_candidate_with_warning(self):
+        # A single-node-per-cluster graph (no edges) can't produce
+        # informative triplets under any candidate resolution: every
+        # cluster in every candidate partition is a singleton, so
+        # _sample_triplets finds no same-cluster neighbor for any anchor
+        # and returns []. This exercises the "no valid triplets sampled"
+        # fallback, which returns the middle candidate.
+        import igraph as ig
+
+        g = ig.Graph(n=6, edges=[], directed=False)
+        g.es["weight"] = []
+        docs = [f"doc {i}" for i in range(6)]
+        embs = np.random.default_rng(0).normal(size=(6, 4)).astype(np.float32)
+
+        with pytest.warns(UserWarning, match="no valid triplets"):
+            best_res = llm_select_resolution(
+                AllBLabeler(), docs, g, embs,
+                resolution_range=(0.1, 2.0), n_candidates=4, n_triplets=6, batch_size=4,
+            )
+        candidates = _candidate_resolutions((0.1, 2.0), 4)
+        assert abs(best_res - candidates[len(candidates) // 2]) < 1e-9
+
+    def test_tied_scores_prefer_middle_candidate_over_first_index(self):
+        # Two disconnected K4 cliques: Leiden finds the identical 2-cluster
+        # partition at every resolution in (0.1, 2.0) (verified empirically
+        # via leidenalg directly), so every candidate's _triplet_agreement
+        # score ties exactly. np.argmax would silently pick index 0 (the
+        # lowest-resolution candidate); the explicit tie-break must instead
+        # land on the middle candidate.
+        import igraph as ig
+
+        a_edges = [(i, j) for i in range(4) for j in range(i + 1, 4)]
+        b_edges = [(4 + i, 4 + j) for i in range(4) for j in range(i + 1, 4)]
+        g = ig.Graph(n=8, edges=a_edges + b_edges, directed=False)
+        g.es["weight"] = [1.0] * g.ecount()
+        docs = [f"doc {i}" for i in range(8)]
+        embs = np.random.default_rng(0).normal(size=(8, 4)).astype(np.float32)
+
+        best_res = llm_select_resolution(
+            AllBLabeler(), docs, g, embs,
+            resolution_range=(0.1, 2.0), n_candidates=5, n_triplets=8, batch_size=4,
+        )
+        candidates = _candidate_resolutions((0.1, 2.0), 5)
+        assert abs(best_res - candidates[len(candidates) // 2]) < 1e-9
+
+
+# --------------------------------------------------------------------------- #
 # Integration: TriTopic.tune_resolution_with_llm
 # --------------------------------------------------------------------------- #
 @pytest.fixture
@@ -233,6 +384,32 @@ class TestTuneResolutionWithLLM:
         model = TriTopic()
         with pytest.raises(ValueError, match="Model not fitted"):
             model.tune_resolution_with_llm(FakeLabeler('{"answers": ["B"]}'))
+
+    def test_raises_clear_error_on_missing_graph_after_save_load(self, fresh_fitted_model, tmp_path):
+        path = str(tmp_path / "model.pkl")
+        fresh_fitted_model.save(path)
+        reloaded = TriTopic.load(path)
+        assert reloaded.graph_ is None  # save()/load() never persists graph_
+        with pytest.raises(ValueError, match="save\\(\\)/load\\(\\)"):
+            reloaded.tune_resolution_with_llm(AllBLabeler())
+
+    def test_resolution_persisted_after_tuning(self, fresh_fitted_model):
+        labeler = AllBLabeler()
+        best_res = llm_select_resolution(
+            labeler,
+            fresh_fitted_model.documents_,
+            fresh_fitted_model.graph_,
+            fresh_fitted_model.embeddings_,
+            resolution_range=(0.1, 2.0),
+            n_candidates=4,
+            n_triplets=12,
+            batch_size=4,
+        )
+        fresh_fitted_model.tune_resolution_with_llm(
+            AllBLabeler(), n_candidates=4, n_triplets=12, batch_size=4, random_state=42
+        )
+        assert fresh_fitted_model.config.resolution == pytest.approx(best_res)
+        assert fresh_fitted_model._clusterer.resolution == pytest.approx(best_res)
 
     def test_returns_self(self, fresh_fitted_model):
         labeler = AllBLabeler()

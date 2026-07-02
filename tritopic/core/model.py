@@ -1849,6 +1849,12 @@ class TriTopic:
         """
         if not self._is_fitted:
             raise ValueError("Model not fitted. Call fit() first.")
+        if self.documents_ is None or self.graph_ is None or self.embeddings_ is None:
+            raise ValueError(
+                "tune_resolution_with_llm requires the fit-time graph, embeddings, "
+                "and documents. These are not persisted by save()/load() — call "
+                "this method on a freshly fit() model, not a reloaded one."
+            )
 
         from tritopic.labeling.llm_granularity import llm_select_resolution
 
@@ -1862,6 +1868,7 @@ class TriTopic:
             n_triplets=n_triplets,
             random_state=random_state,
             batch_size=batch_size,
+            node_weights=self.sample_weights_,
         )
 
         self.labels_ = self._clusterer.fit_predict(
@@ -1870,6 +1877,8 @@ class TriTopic:
             resolution=best_res,
             node_weights=self.sample_weights_,
         )
+        self.config.resolution = best_res
+        self._clusterer.resolution = best_res
 
         self._keyword_extractor.reset()
         self._extract_topic_info(self.documents_)
