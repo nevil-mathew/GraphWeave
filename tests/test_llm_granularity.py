@@ -411,6 +411,46 @@ class TestTuneResolutionWithLLM:
         assert fresh_fitted_model.config.resolution == pytest.approx(best_res)
         assert fresh_fitted_model._clusterer.resolution == pytest.approx(best_res)
 
+    def test_forwards_sample_weights_and_exercises_weighted_objective(
+        self, fresh_fitted_model, monkeypatch
+    ):
+        """tune_resolution_with_llm must forward self.sample_weights_ as
+        node_weights into llm_select_resolution, and that forwarding must
+        actually reach leidenalg as the weighted RBER objective throughout
+        the call (candidate scoring AND the final consensus re-fit) rather
+        than being silently dropped somewhere in between."""
+        import leidenalg as la
+        import tritopic.labeling.llm_granularity as llm_granularity_module
+
+        weights = np.random.default_rng(0).uniform(1, 5, size=len(fresh_fitted_model.documents_))
+        fresh_fitted_model.sample_weights_ = weights
+
+        captured = {}
+        original_select = llm_granularity_module.llm_select_resolution
+
+        def _spy_select(*args, **kwargs):
+            captured["node_weights"] = kwargs.get("node_weights")
+            return original_select(*args, **kwargs)
+
+        monkeypatch.setattr(llm_granularity_module, "llm_select_resolution", _spy_select)
+
+        partition_types_used = []
+        original_find_partition = la.find_partition
+
+        def _spy_find_partition(graph, partition_type, **kwargs):
+            partition_types_used.append(partition_type)
+            return original_find_partition(graph, partition_type, **kwargs)
+
+        monkeypatch.setattr(la, "find_partition", _spy_find_partition)
+
+        fresh_fitted_model.tune_resolution_with_llm(
+            AllBLabeler(), n_candidates=4, n_triplets=12, batch_size=4
+        )
+
+        assert captured["node_weights"] is weights
+        assert len(partition_types_used) > 0
+        assert all(pt is la.RBERVertexPartition for pt in partition_types_used)
+
     def test_returns_self(self, fresh_fitted_model):
         labeler = AllBLabeler()
         result = fresh_fitted_model.tune_resolution_with_llm(
