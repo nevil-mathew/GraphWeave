@@ -1858,7 +1858,9 @@ class TriTopic:
 
         from tritopic.labeling.llm_granularity import llm_select_resolution
 
-        best_res = llm_select_resolution(
+        min_cs = self._effective_min_cluster_size(len(self.embeddings_))
+
+        best_res, diag = llm_select_resolution(
             labeler,
             self.documents_,
             self.graph_,
@@ -1869,11 +1871,29 @@ class TriTopic:
             random_state=random_state,
             batch_size=batch_size,
             node_weights=self.sample_weights_,
+            min_cluster_size=min_cs,
+            return_diagnostics=True,
         )
+
+        self.granularity_diagnostics_ = diag
+
+        if self.config.verbose:
+            print(
+                f"[tune_resolution] best={best_res:.4f} | "
+                f"triplets={diag['n_triplets']} unparsed={diag['n_unparsed']}"
+            )
+            header = f"{'Res':>8}  {'Score':>6}  {'Clusters':>8}  Stage"
+            print(header)
+            print("-" * len(header))
+            for row in diag["candidates"]:
+                print(
+                    f"{row['resolution']:8.4f}  {row['score']:6.4f}  "
+                    f"{row['n_clusters']:8d}  {row['stage']}"
+                )
 
         self.labels_ = self._clusterer.fit_predict(
             self.graph_,
-            min_cluster_size=self._effective_min_cluster_size(len(self.embeddings_)),
+            min_cluster_size=min_cs,
             resolution=best_res,
             node_weights=self.sample_weights_,
         )
