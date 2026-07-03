@@ -33,6 +33,7 @@ A state-of-the-art topic modeling library that fuses semantic embeddings, lexica
 - [Keyword Extraction](#keyword-extraction)
 - [LLM-Powered Labels](#llm-powered-labels)
 - [LLM-Guided Granularity Calibration](#llm-guided-granularity-calibration)
+- [LLM-Guided Embedding Adaptation](#llm-guided-embedding-adaptation)
 - [Visualizations](#visualizations)
 - [Evaluation](#evaluation)
 - [Advanced Usage](#advanced-usage)
@@ -97,6 +98,9 @@ pip install tritopic
 
 # With LLM labeling support (Claude / GPT-4 / Gemini)
 pip install tritopic[llm]
+
+# With LLM-guided embedding fine-tuning (adds datasets, accelerate)
+pip install tritopic[adaptation]
 
 # Full installation (all optional features, including GPU support)
 pip install tritopic[full]
@@ -1079,7 +1083,123 @@ model.tune_resolution_with_llm(
 )
 ```
 
+**How it works (two-stage):**
+
+- **Stage A — coarse sweep:** scores all `n_candidates` resolutions against LLM answers collected once.
+- **Stage B — local refinement:** around the Stage A winner, scores a 5-point fine grid reusing the *same* LLM answers — zero extra API calls. This removes grid-quantization artifacts where the hand-tuned resolution falls between two coarse candidates.
+
+**Bias and sampling improvements:**
+
+- ~50 % of triplet presentations are randomly swapped (different-cluster doc shown as "B") so LLM position preference can't systematically favor one resolution. Answers are un-swapped before scoring.
+- Triplets are chosen to be *discriminative*: a 4× oversampled pool is ranked by how much the candidates *disagree* on each triplet, and only the most informative are kept. Uninformative triplets (where all candidates agree) are discarded upfront.
+- Each candidate is scored across multiple Leiden seeds to reduce run-to-run variance.
+
+**Diagnostics:** after the call, `model.granularity_diagnostics_` holds a per-candidate breakdown:
+
+```python
+model.tune_resolution_with_llm(labeler)
+
+import pandas as pd
+diag = model.granularity_diagnostics_
+df = pd.DataFrame(diag["candidates"])
+print(df[["stage", "resolution", "score", "n_clusters"]])
+# stage  resolution    score  n_clusters
+#     A    0.600000  0.69330          56
+#     A    0.865620  0.69690          73   ← winner
+#     B    0.720675  0.68960          65
+#     ...
+```
+
+A flat score column (all values within ~0.02 of each other) means the LLM couldn't strongly prefer any granularity — in that case the calibrated resolution is a weak preference and your hand-tuned value is equally valid.
+
 **Cost**: each triplet costs one small batched LLM call slice (~8 triplets per call). On Claude Haiku 4.5, a full run costs roughly **$0.01 for a small corpus (~24 triplets) up to ~$0.15 for a large one (~500 triplets)** — cheap enough to run after every `fit()` on a new dataset while you're still tuning `resolution_range`.
+
+---
+
+## LLM-Guided Embedding Adaptation
+
+TriTopic's embedder is fixed and off-the-shelf by default (`all-MiniLM-L6-v2`, or an API model). On a narrow, domain-specific corpus that's the real quality ceiling — the graph, Leiden consensus, and refinement loop can only rearrange whatever geometry the embedder already gives them. `tritopic.adaptation` closes that gap: it asks an LLM to judge a small budget of triplet comparisons on *your* documents, then adapts the embedder to those judgments — the triplet fine-tuning approach from **ClusterLLM** (Zhang, Wang & Shang, EMNLP 2023), with sampling/evaluation ideas from **PRISM** (Douglas, Balci & Aylett-Bullock, WWW 2026) and the LLM keyphrase-expansion / low-confidence-correction techniques from **Viswanathan et al.**, *"Large Language Models Enable Few-Shot Clustering"* (TACL 2024).
+
+It lives in a self-contained `tritopic.adaptation` subpackage — same opt-in philosophy as `tune_resolution_with_llm`: never invoked automatically, and importing it doesn't pull in any extra dependencies until you actually fine-tune.
+
+```python
+from tritopic import TriTopic, LLMLabeler
+
+model = TriTopic().fit(documents)
+
+labeler = LLMLabeler(provider="anthropic", api_key="...", model="claude-haiku-4-5")
+model.adapt_embeddings_with_llm(labeler)   # refits in place with the adapted embeddings
+
+print(model.adaptation_diagnostics_["holdout_triplet_acc_before"])
+print(model.adaptation_diagnostics_["holdout_triplet_acc_after"])
+```
+
+### How it works
+
+1. **Sample triplets** `(A, B, C)` — by default, anchors `A` are the documents the model's *soft assignment is least confident about* (highest entropy across topic probabilities), since those are the boundary cases an LLM judgment helps most. `B`/`C` are `A`'s nearest same-cluster / different-cluster neighbors.
+2. **Ask the LLM** which of `B` or `C` the anchor is more similar to, in batches — reusing the same bias-mitigated (swap-randomized), cached, structured-output query machinery as `tune_resolution_with_llm`.
+3. **Hold out ~20%** of the judged triplets before any training, so "did this help" can always be measured on judgments the adapter never saw.
+4. **Adapt the embedder** with one of two backends (below), trained on `(anchor, positive, negative)` triples the LLM actually judged — not just the pre-existing cluster labels.
+5. **Refit** TriTopic on the adapted embeddings and report before/after metrics.
+
+### Two backends
+
+| Mode | Requires | Works with |
+|---|---|---|
+| `"linear"` | numpy only | any embedder, including API-based ones (Gemini) — the practical default on CPU-only machines |
+| `"finetune"` | `pip install "tritopic[adaptation]"` (adds `datasets`, `accelerate`) | local sentence-transformers models only |
+| `"auto"` (default) | — | picks `"finetune"` when possible, else `"linear"` with a warning |
+
+`"linear"` trains an identity-initialized d×d matrix on top of frozen embeddings with a cosine hinge triplet loss, shrunk toward the identity by an L2 penalty so noisy LLM judgments can't push it far from the base geometry — cheap, CPU-friendly, and the only option for embedders you can't fine-tune. `"finetune"` runs a real 1-epoch, low-LR sentence-transformers fine-tune (`MultipleNegativesRankingLoss` by default) — the full ClusterLLM recipe.
+
+```python
+from tritopic.adaptation import AdaptationConfig
+
+model.adapt_embeddings_with_llm(
+    labeler,
+    config=AdaptationConfig(
+        adapter_mode="linear",     # or "finetune" / "auto"
+        n_triplets=1000,           # ~ ClusterLLM's budget
+        triplet_sampling="entropy",
+        holdout_frac=0.2,
+        cache_path="triplet_cache.jsonl",   # repeat runs pay zero API cost
+    ),
+)
+```
+
+### Did it actually help? (`compare_embedders`)
+
+Fine-tuning without a way to check for regressions is how bugs ship. `compare_embedders` fits an *identical* TriTopic config on baseline vs. adapted embeddings and tabulates intrinsic metrics (silhouette, Davies–Bouldin, Calinski–Harabasz, consensus stability), held-out triplet accuracy (label-free — works on your own unlabeled corpus), and — when you have ground truth (e.g. a labeled benchmark corpus) — ARI/NMI/cluster accuracy:
+
+```python
+from tritopic.adaptation import adapt_and_refit
+
+new_model, report = adapt_and_refit(model, labeler)
+print(report["comparison"])
+```
+
+`adapt_and_refit` (the non-mutating counterpart to `adapt_embeddings_with_llm`) leaves the original model untouched and returns a new one, so before/after is always available side by side. If held-out triplet accuracy doesn't improve, it warns rather than silently shipping a worse embedder.
+
+### Cheaper extras (no fine-tuning required)
+
+Two additional, independent levers from Viswanathan et al. (TACL 2024) — useful with any embedder, including API-based ones:
+
+```python
+from tritopic import EmbeddingEngine
+from tritopic.adaptation import generate_keyphrases, keyphrase_expand_embeddings, reassign_low_confidence
+
+# LLM keyphrase expansion: blend per-document keyphrases into the embedding
+engine = EmbeddingEngine(model_name=model.config.embedding_model, provider=model.config.embedding_provider)
+keyphrases = generate_keyphrases(labeler, documents)
+adapted_emb = keyphrase_expand_embeddings(documents, keyphrases, engine)
+
+# Post-hoc correction: ask the LLM to re-adjudicate only the least-confident assignments
+corrections = reassign_low_confidence(model, labeler, margin_threshold=0.15, max_docs=200)
+```
+
+**Cost**: same batched-query economics as `tune_resolution_with_llm` — a few hundred to ~1000 triplets, ~8 per LLM call, cached to disk. On Claude Haiku 4.5, a full 1000-triplet adaptation run costs well under $1.
+
+**Detachability**: `tritopic.adaptation` is designed to be lifted into its own package later — it imports only numpy/scipy/scikit-learn/pandas/sentence-transformers plus one small compatibility shim into the existing triplet-sampling code, never the rest of TriTopic's internals.
 
 ---
 

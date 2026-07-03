@@ -1807,12 +1807,25 @@ class TriTopic:
 
         Implements the triplet-query granularity calibration from ClusterLLM
         (Zhang, Wang & Shang, EMNLP 2023): several candidate resolutions are
-        scored by how well their (cheap, single-pass) Leiden partitions agree
-        with an LLM's judgments on sampled (anchor, same-cluster, different-
-        cluster) document triplets. The winning resolution is then re-fit
-        with a full consensus Leiden run and all downstream topic state
-        (keywords, centroids, representative docs, soft assignments) is
-        refreshed.
+        scored by how well their Leiden partitions agree with an LLM's
+        judgments on sampled (anchor, same-cluster, different-cluster) document
+        triplets. The winning resolution is then re-fit with a full consensus
+        Leiden run and all downstream topic state (keywords, centroids,
+        representative docs, soft assignments) is refreshed.
+
+        The calibration runs in two stages: a coarse sweep over ``n_candidates``
+        geometrically-spaced resolutions (Stage A), followed by a fine 5-point
+        grid around the coarse winner (Stage B) that reuses the already-
+        collected LLM answers at zero extra API cost. Triplets are sampled to be
+        discriminative (candidates must disagree on them) and ~50 % are randomly
+        presented with swapped B/C positions to cancel LLM position bias.
+
+        After the call, ``self.granularity_diagnostics_`` contains a dict with
+        keys ``candidates`` (list of per-resolution dicts with ``resolution``,
+        ``score``, ``n_clusters``, ``stage``), ``n_triplets``, ``n_unparsed``,
+        and ``reference_resolution``. A flat ``score`` column (values within
+        ~0.02 of each other) means the LLM couldn't strongly prefer any
+        granularity — the hand-tuned resolution is equally valid in that case.
 
         This is a third, opt-in path alongside modularity-maximization and
         binary-search-to-target-count (see
@@ -1904,6 +1917,74 @@ class TriTopic:
         self._extract_topic_info(self.documents_)
         self._compute_topic_centroids()
         self._compute_probabilities()
+
+        return self
+
+    def adapt_embeddings_with_llm(
+        self,
+        labeler,
+        config: "AdaptationConfig | None" = None,
+    ) -> "TriTopic":
+        """Adapt this model's embedder to LLM-judged triplet preferences and
+        refit in place with the adapted embeddings.
+
+        Implements the triplet-fine-tuning half of ClusterLLM (Zhang, Wang &
+        Shang, EMNLP 2023): triplets are sampled (preferring the documents
+        the model's soft assignment is least confident about), an LLM
+        judges which of two candidates each anchor is more similar to, and
+        the embedder is adapted to those judgments — either a real
+        sentence-transformers fine-tune (local models only) or a pure-numpy
+        linear transform on top of frozen embeddings (works with any
+        embedder, including API-based ones). See
+        :mod:`tritopic.adaptation` for the full machinery, including an
+        evaluation harness for measuring whether the adaptation helped.
+
+        Mirrors :meth:`tune_resolution_with_llm`'s ergonomics: requires a
+        freshly fit model (not a reloaded one), stores diagnostics on
+        ``self.adaptation_diagnostics_``, and returns ``self``.
+
+        Parameters
+        ----------
+        labeler : LLMLabeler (duck-typed)
+            Must expose ``call_structured``.
+        config : AdaptationConfig, optional
+            Triplet budget, sampling strategy, fine-tune/linear
+            hyperparameters, etc. Defaults to ``AdaptationConfig()``.
+
+        Returns
+        -------
+        self : TriTopic
+
+        Examples
+        --------
+        >>> from tritopic import TriTopic, LLMLabeler
+        >>> model = TriTopic().fit(documents)
+        >>> labeler = LLMLabeler(provider="anthropic", api_key="...", model="claude-haiku-4-5")
+        >>> model.adapt_embeddings_with_llm(labeler)
+        """
+        if not self._is_fitted:
+            raise ValueError("Model not fitted. Call fit() first.")
+        if self.documents_ is None or self.labels_ is None:
+            raise ValueError(
+                "adapt_embeddings_with_llm requires the fit-time documents and "
+                "labels. These are not persisted by save()/load() — call this "
+                "method on a freshly fit() model, not a reloaded one."
+            )
+
+        from tritopic.adaptation.pipeline import adapt_and_refit
+
+        new_model, report = adapt_and_refit(self, labeler, config=config, evaluate=False)
+
+        if self.config.verbose:
+            print(
+                f"[adapt_embeddings] mode={report['mode']} | "
+                f"triplets train={report['n_train_triplets']} holdout={report['n_holdout_triplets']} | "
+                f"holdout_acc {report['holdout_triplet_acc_before']:.3f} -> "
+                f"{report['holdout_triplet_acc_after']:.3f}"
+            )
+
+        self.__dict__.update(new_model.__dict__)
+        self.adaptation_diagnostics_ = report
 
         return self
 

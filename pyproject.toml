@@ -102,6 +102,17 @@ full = [
     "hnswlib>=0.7.0",
     "torch>=2.0.0",
     "faiss-cpu>=1.7.4",
+    "datasets>=2.14.0",
+    "accelerate>=0.26.0",
+]
+# LLM-guided embedding adaptation (tritopic.adaptation): real
+# sentence-transformers fine-tuning needs the Trainer API's dependencies.
+# The pure-numpy LinearAdapter backend needs none of this — it's usable
+# with only the core install.
+adaptation = [
+    "datasets>=2.14.0",
+    "accelerate>=0.26.0",
+    "torch>=2.0.0",
 ]
 # GPU acceleration extras
 # -------------------------
