@@ -27,7 +27,7 @@ Datasets (full mode)
 ---------------------
 - 20ng      20 Newsgroups, via scikit-learn (no auth needed)
 - bbc       BBC News, via `datasets` (SetFit/bbc-news, 1,225 train rows)
-- ag_news   AG News, via `datasets` (ag_news)
+- ag_news   AG News, via `datasets` (fancyzhx/ag_news)
 - arxiv     Arxiv abstracts, via `datasets` (ccdv/arxiv-classification)
 
 Each dataset is subsampled once (fixed --sample-seed) to the doc count in
@@ -137,7 +137,7 @@ def load_bbc_news(n_docs: int, seed: int) -> tuple[list[str], np.ndarray]:
 def load_ag_news(n_docs: int, seed: int) -> tuple[list[str], np.ndarray]:
     if not HAVE_HF_DATASETS:
         raise ImportError("AG News requires `pip install datasets` (tritopic[benchmark]).")
-    ds = hf_datasets.load_dataset("ag_news", split="train")
+    ds = hf_datasets.load_dataset("fancyzhx/ag_news", split="train")
     texts = list(ds["text"])
     labels = np.array(ds["label"])
     return _subsample_stratified(texts, labels, n_docs, seed)
