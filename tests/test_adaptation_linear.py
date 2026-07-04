@@ -2,8 +2,10 @@
 network, no fine-tuning dependencies required."""
 
 import numpy as np
+import pytest
 
-from tritopic.adaptation.adapter import LinearAdapter
+from tritopic.adaptation.adapter import EmbeddingAdapter, LinearAdapter
+from tritopic.adaptation.config import AdaptationConfig
 from tritopic.adaptation.evaluation import triplet_accuracy
 from tritopic.adaptation.triplets import TripletJudgment
 
@@ -99,3 +101,46 @@ class TestLinearAdapter:
         adapter = LinearAdapter(dim=embs.shape[1])
         adapter.fit(embs, [])
         np.testing.assert_allclose(adapter.W, np.eye(embs.shape[1]))
+
+    def test_transform_normalize_false_skips_normalization(self):
+        # Deliberately not unit-norm, so normalize=False is actually observable.
+        embs = np.array([[3.0, 4.0], [1.0, 0.0]])  # norms 5.0 and 1.0
+        adapter = LinearAdapter(dim=2)
+
+        out_raw = adapter.transform(embs, normalize=False)
+        np.testing.assert_allclose(out_raw, embs, atol=1e-8)  # identity W, no renorm
+
+        out_normalized = adapter.transform(embs, normalize=True)
+        np.testing.assert_allclose(np.linalg.norm(out_normalized, axis=1), [1.0, 1.0], atol=1e-8)
+
+
+class TestResolveModeExplicitFinetune:
+    """adapter_mode='finetune' must fail loudly with actionable guidance when
+    the Trainer-API dependencies aren't usable, not with a raw ImportError
+    surfaced later from deep inside _finetune_sentence_transformer."""
+
+    def test_explicit_finetune_raises_actionable_error_when_deps_missing(self, monkeypatch):
+        adapter = EmbeddingAdapter(config=AdaptationConfig(adapter_mode="finetune"), is_local=True)
+        monkeypatch.setattr(
+            EmbeddingAdapter, "_finetune_deps_error", staticmethod(lambda: "fake missing dep")
+        )
+        with pytest.raises(ImportError, match="fake missing dep"):
+            adapter._resolve_mode()
+
+    def test_explicit_finetune_resolves_when_deps_available(self, monkeypatch):
+        adapter = EmbeddingAdapter(config=AdaptationConfig(adapter_mode="finetune"), is_local=True)
+        monkeypatch.setattr(EmbeddingAdapter, "_finetune_deps_error", staticmethod(lambda: None))
+        assert adapter._resolve_mode() == "finetune"
+
+    def test_explicit_finetune_still_rejects_non_local_encoder(self):
+        adapter = EmbeddingAdapter(config=AdaptationConfig(adapter_mode="finetune"), is_local=False)
+        with pytest.raises(ValueError, match="local sentence-transformers"):
+            adapter._resolve_mode()
+
+    def test_auto_mode_fallback_unaffected(self, monkeypatch):
+        adapter = EmbeddingAdapter(config=AdaptationConfig(adapter_mode="auto"), is_local=True)
+        monkeypatch.setattr(
+            EmbeddingAdapter, "_finetune_deps_error", staticmethod(lambda: "fake missing dep")
+        )
+        with pytest.warns(UserWarning, match="Falling back to linear"):
+            assert adapter._resolve_mode() == "linear"

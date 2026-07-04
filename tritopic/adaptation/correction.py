@@ -73,7 +73,7 @@ def reassign_low_confidence(
     margin_threshold: float = 0.15,
     top_k: int = 3,
     max_docs: int = 200,
-    batch_size: int = 8,
+    batch_size: int = 8,  # chunks the iteration only — each document still gets its own LLM call
     n_docs_chars: int = 300,
     dry_run: bool = False,
     random_state: int = 42,
@@ -139,6 +139,15 @@ def reassign_low_confidence(
             })
 
     if not dry_run and any(r["applied"] for r in rows):
+        # A reassignment can empty a topic out entirely; recomputing a
+        # centroid over zero documents would average an empty slice (NaN),
+        # so drop any now-empty topic before refreshing centroids/probabilities.
+        emptied = [
+            t.topic_id for t in model.topics_
+            if t.topic_id != -1 and not np.any(model.labels_ == t.topic_id)
+        ]
+        if emptied:
+            model.topics_ = [t for t in model.topics_ if t.topic_id not in emptied]
         model._compute_topic_centroids()
         model._compute_probabilities()
 

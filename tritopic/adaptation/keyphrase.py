@@ -86,9 +86,13 @@ def generate_keyphrases(
         with open(cache_path) as f:
             for line in f:
                 line = line.strip()
-                if line:
+                if not line:
+                    continue
+                try:
                     rec = json.loads(line)
                     cache[rec["hash"]] = rec["keyphrases"]
+                except (json.JSONDecodeError, KeyError):
+                    continue  # skip a malformed/partial line rather than losing the whole cache
 
     def _hash(doc: str) -> str:
         return hashlib.sha256(f"v1|{n_keyphrases}|{doc[:n_docs_chars]}".encode("utf-8")).hexdigest()
@@ -135,6 +139,9 @@ def keyphrase_expand_embeddings(
     ``EmbeddingEngine`` — local or API-based — works directly.
 
     - ``"average"``: ``l2norm((1-weight) * enc(doc) + weight * enc(keyphrases))``
+      for documents with keyphrases; documents with an empty keyphrase list
+      are left as their own (normalized) embedding — blending in
+      ``enc("")`` would dilute them with a meaningless embedding-of-nothing.
     - ``"concat_encode"``: re-encode ``doc + "\\nKeyphrases: " + phrases``
     """
     if mode == "concat_encode":
@@ -147,11 +154,20 @@ def keyphrase_expand_embeddings(
     if mode != "average":
         raise ValueError(f"Unknown mode: {mode!r}")
 
-    doc_emb = np.asarray(encoder.encode(documents), dtype=np.float64)
-    phrase_texts = ["; ".join(kws) if kws else "" for kws in keyphrases]
-    phrase_emb = np.asarray(encoder.encode(phrase_texts), dtype=np.float64)
+    kw_positions = [i for i, kws in enumerate(keyphrases) if kws]
+    if kw_positions:
+        phrase_texts = ["; ".join(keyphrases[i]) for i in kw_positions]
+        # One encode() call for docs + keyphrase texts, not two — halves
+        # request overhead for API-backed encoders.
+        all_emb = np.asarray(encoder.encode(documents + phrase_texts), dtype=np.float64)
+        doc_emb = all_emb[: len(documents)]
+        phrase_emb = all_emb[len(documents):]
+        combined = doc_emb.copy()
+        for local_i, doc_i in enumerate(kw_positions):
+            combined[doc_i] = (1 - weight) * doc_emb[doc_i] + weight * phrase_emb[local_i]
+    else:
+        combined = np.asarray(encoder.encode(documents), dtype=np.float64)
 
-    combined = (1 - weight) * doc_emb + weight * phrase_emb
     if not normalize:
         return combined
     norms = np.linalg.norm(combined, axis=1, keepdims=True)

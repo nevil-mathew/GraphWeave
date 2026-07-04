@@ -57,6 +57,20 @@ def test_keyphrase_expand_embeddings_weight_zero_reproduces_base():
     np.testing.assert_allclose(expanded, base_norm, atol=1e-8)
 
 
+def test_keyphrase_expand_embeddings_empty_keyphrases_unblended():
+    """A document with no keyphrases should keep its own embedding even with
+    weight > 0 — blending in encode("") would dilute it for no reason."""
+    docs = ["hello world", "goodbye world"]
+    keyphrases = [["greeting"], []]  # second doc has no keyphrases
+    encoder = _DuckEncoder()
+
+    base = encoder.encode(docs)
+    base_norm = base / np.linalg.norm(base, axis=1, keepdims=True)
+
+    expanded = keyphrase_expand_embeddings(docs, keyphrases, encoder, weight=0.9, mode="average")
+    np.testing.assert_allclose(expanded[1], base_norm[1], atol=1e-8)
+
+
 def test_keyphrase_expand_embeddings_concat_mode():
     docs = ["hello world"]
     keyphrases = [["greeting", "hi"]]
