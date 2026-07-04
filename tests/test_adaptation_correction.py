@@ -58,3 +58,48 @@ def test_max_docs_respected():
     model = _fit_small_model()
     df = reassign_low_confidence(model, _AlwaysNoneLabeler(), margin_threshold=1.0, max_docs=5)
     assert len(df) <= 5
+
+
+class _AlwaysSecondChoiceLabeler:
+    def call_structured(self, system_prompt, user_prompt, schema, max_tokens=None):
+        return json.dumps({"choice": "1"})
+
+
+def test_topic_emptied_entirely_does_not_crash():
+    """Force every document in one topic to be reassigned to another topic,
+    fully draining it. Used to crash _compute_topic_centroids() (np.average
+    / .mean over an empty slice -> NaN centroid, then NaN probabilities)."""
+    model = _fit_small_model()
+    topics = [t for t in model.topics_ if t.topic_id != -1]
+    topic_order = [t.topic_id for t in topics]  # column order matches probabilities_
+    n_topics = len(topic_order)
+    target_topic = topic_order[0]
+    target_mask = model.labels_ == target_topic
+
+    # Hand-craft probabilities_ so every target_topic doc has a tiny margin
+    # between its own topic (col 0, current top-1) and topic_order[1]
+    # (col 1, top-2) — with choice="1" that reassigns 0 -> topic_order[1] for
+    # every one of them. Every other doc gets a huge margin so it sorts last
+    # and stays outside max_docs, leaving the rest of the model untouched.
+    proba = np.full((len(model.labels_), n_topics), 0.01)
+    proba[~target_mask, 0] = 0.9
+    proba[target_mask, 0] = 0.40
+    proba[target_mask, 1] = 0.35
+    model.probabilities_ = proba
+
+    df = reassign_low_confidence(
+        model,
+        _AlwaysSecondChoiceLabeler(),
+        margin_threshold=1.0,  # select every document regardless of confidence
+        top_k=2,
+        max_docs=int(target_mask.sum()),
+    )
+
+    assert not df.empty
+    assert (df["new_topic"] == topic_order[1]).all()
+    remaining_topic_ids = {t.topic_id for t in model.topics_ if t.topic_id != -1}
+    assert target_topic not in remaining_topic_ids
+    for topic_id in remaining_topic_ids:
+        assert np.any(model.labels_ == topic_id)  # every surviving topic still has members
+    assert not np.any(np.isnan(model.topic_embeddings_))
+    assert not np.any(np.isnan(model.probabilities_))

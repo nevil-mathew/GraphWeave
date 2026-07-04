@@ -120,7 +120,16 @@ def adapt_and_refit(
             UserWarning,
         )
 
-    new_model = TriTopic(config=copy.deepcopy(model.config))
+    if model.config.use_metadata_view:
+        warnings.warn(
+            "adapt_and_refit: the original model used use_metadata_view=True, but "
+            "the fit-time metadata DataFrame is not persisted on the model, so the "
+            "refit model is fit WITHOUT the metadata view. Pass the same metadata "
+            "to the refit call yourself if you need it preserved.",
+            UserWarning,
+        )
+
+    new_model = TriTopic(n_topics=model.n_topics, config=copy.deepcopy(model.config))
     new_model.fit(
         documents, embeddings=new_embeddings, sample_weights=getattr(model, "sample_weights_", None)
     )

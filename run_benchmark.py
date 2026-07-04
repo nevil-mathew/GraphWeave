@@ -158,10 +158,15 @@ def load_dataset(key: str, sample_seed: int) -> tuple[list[str], np.ndarray]:
     return loader(spec.n_docs, sample_seed)
 
 
-def embed(key: str, texts: list[str]) -> np.ndarray:
-    """all-MiniLM-L6-v2 embeddings, cached per dataset to benchmarks/.cache/."""
+def embed(key: str, texts: list[str], sample_seed: int) -> np.ndarray:
+    """all-MiniLM-L6-v2 embeddings, cached per dataset to benchmarks/.cache/.
+
+    The cache key includes sample_seed so a rerun with a different
+    subsampling seed can't silently reuse embeddings for a different set
+    of documents (only doc count and dataset key were used previously).
+    """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = CACHE_DIR / f"{key}_n{len(texts)}_emb.npy"
+    cache_path = CACHE_DIR / f"{key}_n{len(texts)}_seed{sample_seed}_emb.npy"
     if cache_path.exists():
         return np.load(cache_path)
 
@@ -277,7 +282,7 @@ def run_full_benchmark(dataset_keys: list[str], seeds: int, k_grid_points: int, 
         hr(f"Dataset: {spec.name} ({key})")
         docs, true_labels = load_dataset(key, sample_seed)
         print(f"  {len(docs):,} docs, {len(np.unique(true_labels))} ground-truth categories")
-        embeddings = embed(key, docs)
+        embeddings = embed(key, docs, sample_seed)
         k_values = k_grid_for(spec.k_range, k_grid_points)
         print(f"  k values: {k_values}  |  seeds: {seeds}")
 

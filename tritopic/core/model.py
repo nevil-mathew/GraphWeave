@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,9 @@ from tritopic.core.hierarchy import TopicNode, TopicHierarchy
 from tritopic.utils.metrics import compute_coherence, compute_diversity, compute_stability
 from tritopic.utils.timing import step_timer
 from tritopic.utils.quote_verification import verify_quotes
+
+if TYPE_CHECKING:
+    from tritopic.adaptation.config import AdaptationConfig
 
 
 @dataclass
@@ -1930,7 +1933,7 @@ class TriTopic:
     def adapt_embeddings_with_llm(
         self,
         labeler,
-        config: "AdaptationConfig | None" = None,
+        config: AdaptationConfig | None = None,
     ) -> "TriTopic":
         """Adapt this model's embedder to LLM-judged triplet preferences and
         refit in place with the adapted embeddings.

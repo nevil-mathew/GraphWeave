@@ -108,6 +108,33 @@ class TestAdaptAndRefit:
         with pytest.raises(ValueError):
             adapt_and_refit(model, _TextOracleLabeler())
 
+    def test_explicit_n_topics_carried_through_refit(self):
+        docs, _labels, embs = _make_corpus()
+        cfg = TriTopicConfig(
+            use_dim_reduction=False, use_iterative_refinement=False,
+            n_consensus_runs=3, min_cluster_size=5, n_neighbors=10,
+            random_state=42, verbose=False,
+        )
+        model = TriTopic(n_topics=3, config=cfg).fit(docs, embeddings=embs)
+        assert model.n_topics == 3
+
+        new_model, _report = adapt_and_refit(
+            model, _TextOracleLabeler(), config=_ADAPT_CONFIG, evaluate=False
+        )
+        assert new_model.n_topics == 3
+
+    def test_metadata_view_warns_when_not_carried_through(self):
+        docs, _labels, embs = _make_corpus()
+        cfg = TriTopicConfig(
+            use_dim_reduction=False, use_iterative_refinement=False,
+            n_consensus_runs=3, min_cluster_size=5, n_neighbors=10,
+            random_state=42, verbose=False, use_metadata_view=True,
+        )
+        model = TriTopic(config=cfg).fit(docs, embeddings=embs)
+
+        with pytest.warns(UserWarning, match="metadata"):
+            adapt_and_refit(model, _TextOracleLabeler(), config=_ADAPT_CONFIG, evaluate=False)
+
 
 class TestAdaptEmbeddingsWithLlmDelegate:
     def test_in_place_refit_sets_diagnostics(self):

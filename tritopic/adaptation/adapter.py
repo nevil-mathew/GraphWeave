@@ -112,8 +112,10 @@ class LinearAdapter:
 
         return self
 
-    def transform(self, embeddings: np.ndarray) -> np.ndarray:
+    def transform(self, embeddings: np.ndarray, normalize: bool = True) -> np.ndarray:
         out = np.asarray(embeddings, dtype=np.float64) @ self.W
+        if not normalize:
+            return out
         norms = np.linalg.norm(out, axis=1, keepdims=True)
         norms = np.where(norms == 0, 1.0, norms)
         return out / norms
@@ -185,6 +187,22 @@ class EmbeddingAdapter:
         self.bank_ = bank
         return bank
 
+    @staticmethod
+    def _finetune_deps_error() -> str | None:
+        """None if the sentence-transformers Trainer API is usable, else a
+        human-readable reason — shared by the explicit-mode check and the
+        auto-mode fallback so both give the same actionable guidance."""
+        try:
+            import accelerate  # noqa: F401
+            import datasets  # noqa: F401
+            import sentence_transformers
+
+            if int(sentence_transformers.__version__.split(".")[0]) < 3:
+                return "sentence-transformers >= 3.0 required for the Trainer API"
+        except ImportError as e:
+            return str(e)
+        return None
+
     def _resolve_mode(self) -> str:
         mode = self.config.adapter_mode
         if mode == "finetune" and not self.is_local:
@@ -193,20 +211,23 @@ class EmbeddingAdapter:
                 "embedder; API-based providers (e.g. Google Gemini) cannot be "
                 "fine-tuned. Use adapter_mode='linear' or 'auto' instead."
             )
+        if mode == "finetune":
+            dep_error = self._finetune_deps_error()
+            if dep_error is not None:
+                raise ImportError(
+                    f"adapter_mode='finetune' was requested but is unusable ({dep_error}). "
+                    'Install with: pip install "tritopic[adaptation]", or use '
+                    "adapter_mode='linear' or 'auto' instead."
+                )
+            return "finetune"
         if mode != "auto":
             return mode
         if not self.is_local:
             return "linear"
-        try:
-            import accelerate  # noqa: F401
-            import datasets  # noqa: F401
-            import sentence_transformers
-
-            if int(sentence_transformers.__version__.split(".")[0]) < 3:
-                raise ImportError("sentence-transformers >= 3.0 required for the Trainer API")
-        except ImportError as e:
+        dep_error = self._finetune_deps_error()
+        if dep_error is not None:
             warnings.warn(
-                f"Falling back to linear adapter mode ({e}). For real fine-tuning "
+                f"Falling back to linear adapter mode ({dep_error}). For real fine-tuning "
                 'install with: pip install "tritopic[adaptation]"',
                 UserWarning,
             )
@@ -331,7 +352,7 @@ class EmbeddingAdapter:
         if self.base_encoder is None:
             raise ValueError("linear adapter mode needs base_encoder to encode new documents")
         base = self.base_encoder.encode(documents)
-        return self.linear_.transform(base)
+        return self.linear_.transform(base, normalize=normalize)
 
     def save(self, path: str) -> None:
         out = Path(path)
