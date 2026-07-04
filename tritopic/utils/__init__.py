@@ -16,6 +16,7 @@ from tritopic.utils.gpu import (
     gpu_cosine_similarity,
     gpu_refine_embeddings,
 )
+from tritopic.utils.quote_verification import extract_quoted_phrases, verify_quotes
 
 __all__ = [
     "compute_coherence",
@@ -30,4 +31,6 @@ __all__ = [
     "get_device",
     "gpu_cosine_similarity",
     "gpu_refine_embeddings",
+    "extract_quoted_phrases",
+    "verify_quotes",
 ]

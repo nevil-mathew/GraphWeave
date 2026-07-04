@@ -5,6 +5,7 @@
 A state-of-the-art topic modeling library that fuses semantic embeddings, lexical similarity, and metadata context through multi-view graph construction, consensus Leiden clustering, and iterative refinement. TriTopic produces stable, interpretable topics and **outperforms BERTopic, LDA, and NMF on all standard benchmarks**.
 
 [![PyPI version](https://badge.fury.io/py/tritopic.svg)](https://badge.fury.io/py/tritopic)
+[![CI](https://github.com/nevil-mathew/topic-extraction-poc/actions/workflows/ci.yml/badge.svg)](https://github.com/nevil-mathew/topic-extraction-poc/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Downloads](https://static.pepy.tech/badge/tritopic)](https://pepy.tech/project/tritopic)
@@ -678,7 +679,7 @@ You can ignore the warning and use the resulting model normally.
 | `ImportError: cannot import name '...' from 'transformers'` in Colab | Colab silently upgraded torch/transformers mid-session | **Runtime -> Restart session**, then rerun |
 | Too many tiny topics | `resolution` too high or `min_cluster_size` too low | Lower `resolution` (e.g. 0.8) or set `min_cluster_fraction=0.005` (scales with corpus size) |
 | `ValueError: Found array with 0 sample(s)` in `transform()` | `min_cluster_size` too large — all Leiden communities filtered to outliers | Lower `min_cluster_size`, or switch to `min_cluster_fraction=0.005` |
-| Too few large topics | `resolution` too low | Raise `resolution` (e.g. 1.3) or set `n_topics_target=N` |
+| Too few large topics | `resolution` too low | Raise `resolution` (e.g. 1.3) or set `n_topics=N` |
 | 30%+ outliers | HDBSCAN-like over-pruning of small clusters | Call `model.reduce_outliers(strategy="embeddings")` after fit |
 | LLM labels are empty / generic | API call failed silently in earlier versions | v2.3.0+ retries with backoff; check API key and rate limits |
 
@@ -1523,10 +1524,10 @@ Categorical columns create edges between documents with matching values. Numeric
 
 ### Target number of topics
 
-Use `n_topics_target` to automatically find the Leiden resolution that produces a specific number of topics:
+Use `n_topics` to automatically find the Leiden resolution that produces a specific number of topics:
 
 ```python
-model = TriTopic(n_topics_target=10)
+model = TriTopic(n_topics=10)
 model.fit(documents)
 # TriTopic uses bidirectional resolution search to find ~10 topics
 ```
@@ -1848,6 +1849,18 @@ TriTopic achieves the **highest NMI on every single dataset** while maintaining 
 - TriTopic: default settings (hybrid graph, consensus Leiden, iterative refinement)
 - 3 random seeds per configuration, results averaged
 - Full reproduction script: [`run_benchmark.py`](run_benchmark.py)
+
+```bash
+# Full reproduction (needs network + `pip install -e ".[benchmark]"`): downloads
+# 20 Newsgroups / BBC News / AG News / Arxiv and all-MiniLM-L6-v2, then runs
+# TriTopic, BERTopic, NMF, and LDA across each dataset's documented k-range.
+python run_benchmark.py
+
+# Fast, no-download smoke test (synthetic data) — proves the harness runs
+# end-to-end; this is what CI runs on every push, NOT a reproduction of the
+# numbers above.
+python run_benchmark.py --quick
+```
 
 ---
 

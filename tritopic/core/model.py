@@ -22,6 +22,7 @@ from tritopic.core.keywords import KeywordExtractor
 from tritopic.core.hierarchy import TopicNode, TopicHierarchy
 from tritopic.utils.metrics import compute_coherence, compute_diversity, compute_stability
 from tritopic.utils.timing import step_timer
+from tritopic.utils.quote_verification import verify_quotes
 
 
 @dataclass
@@ -53,6 +54,12 @@ class ReportTheme:
     topic_ids: list[int]                # constituent topic IDs
     total_size: int                     # sum of constituent topic sizes
     keywords: list[str]                 # aggregated top keywords
+    unverified_quotes: list[str] = field(default_factory=list)
+    """Quoted phrases in ``narrative`` that could not be matched verbatim to
+    any of the source documents shown to the LLM. Non-empty means the
+    narrative should be reviewed before publishing — the LLM may have
+    paraphrased or fabricated the quote. See
+    :func:`tritopic.utils.quote_verification.verify_quotes`."""
 
 
 @dataclass
@@ -2480,6 +2487,15 @@ Respond ONLY with this exact JSON, no other text:
         raw = labeler.call_raw(system_prompt, user_prompt, max_tokens=1200)
         narrative = self._parse_narrative_response(raw)
 
+        unverified_quotes = verify_quotes(narrative, doc_texts)
+        if unverified_quotes:
+            warnings.warn(
+                f"Meta-theme '{proposal['title']}' (theme_id={theme_id}) contains "
+                f"{len(unverified_quotes)} quoted phrase(s) not found verbatim in the "
+                f"source documents shown to the LLM: {unverified_quotes}. Review before "
+                f"publishing — the LLM may have paraphrased or fabricated the quote."
+            )
+
         return ReportTheme(
             theme_id=theme_id,
             title=proposal["title"].strip(),
@@ -2487,6 +2503,7 @@ Respond ONLY with this exact JSON, no other text:
             topic_ids=[t.topic_id for t in member_topics],
             total_size=total_size,
             keywords=agg_keywords,
+            unverified_quotes=unverified_quotes,
         )
 
     def _parse_narrative_response(self, raw: str) -> str:
@@ -2548,6 +2565,8 @@ Respond ONLY with this exact JSON, no other text:
                 "No report themes available. Call generate_report_themes(labeler) first."
             )
 
+        flagged = [t for t in self.report_themes_ if t.unverified_quotes]
+
         lines: list[str] = []
         lines.append("# Emerging Themes\n")
         lines.append(
@@ -2555,10 +2574,22 @@ Respond ONLY with this exact JSON, no other text:
             "These themes synthesize the most frequent and meaningful signals across "
             "all collected documents.\n"
         )
+        if flagged:
+            lines.append(
+                f"> **Review needed:** {len(flagged)} theme(s) below contain a quoted "
+                "phrase that could not be verified against the source documents "
+                "(marked with ⚠). Confirm these before sharing the report.\n"
+            )
 
         for theme in self.report_themes_:
-            lines.append(f"## {theme.theme_id}. {theme.title}\n")
+            flag = " ⚠" if theme.unverified_quotes else ""
+            lines.append(f"## {theme.theme_id}. {theme.title}{flag}\n")
             lines.append(theme.narrative.strip() + "\n")
+            if theme.unverified_quotes:
+                quoted = "; ".join(f"“{q}”" for q in theme.unverified_quotes)
+                lines.append(
+                    f"*Unverified quote(s) — not found verbatim in source documents: {quoted}*\n"
+                )
 
         if include_appendix:
             lines.append("\n---\n")

@@ -178,3 +178,5 @@ pyrightconfig.json
 .cocoindex_code
 graphify-out
 run*
+!run_benchmark.py
+benchmarks/results/
