@@ -57,9 +57,12 @@ def adapt_and_refit(
     Returns
     -------
     (TriTopic, dict)
-        The new fitted model and a report dict with triplet/LLM-call
-        counts, held-out triplet accuracy before/after, and (for the
-        fine-tune backend) a forgetting check.
+        The new fitted model and a report dict with the trained
+        ``EmbeddingAdapter`` (``report["adapter"].save(path)`` persists the
+        fine-tuned/linear weights — do this before an ephemeral session like
+        a Kaggle kernel ends), triplet/LLM-call counts, held-out triplet
+        accuracy before/after, and (for the fine-tune backend) a forgetting
+        check.
     """
     if not getattr(model, "_is_fitted", False):
         raise ValueError("Model not fitted. Call fit() first.")
@@ -136,6 +139,7 @@ def adapt_and_refit(
 
     report: dict = {
         "mode": adapter.mode_,
+        "adapter": adapter,  # call adapter.save(path) to persist the fine-tuned/linear weights
         "n_llm_calls": bank.n_llm_calls,
         "n_cache_hits": bank.n_cache_hits,
         "n_unparsed": bank.n_unparsed,

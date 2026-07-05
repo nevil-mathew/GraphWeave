@@ -1123,6 +1123,8 @@ TriTopic's embedder is fixed and off-the-shelf by default (`all-MiniLM-L6-v2`, o
 
 It lives in a self-contained `tritopic.adaptation` subpackage — same opt-in philosophy as `tune_resolution_with_llm`: never invoked automatically, and importing it doesn't pull in any extra dependencies until you actually fine-tune.
 
+**Notebooks:** [`notebooks/embedding_adaptation_demo.ipynb`](notebooks/embedding_adaptation_demo.ipynb) proves the pipeline for free (a fake oracle labeler, no API key, no GPU); [`notebooks/embedding_adaptation_kaggle.ipynb`](notebooks/embedding_adaptation_kaggle.ipynb) runs the real thing on your own CSV — OpenRouter for triplet judgments, real `all-MiniLM-L6-v2` fine-tuning on a Kaggle GPU, plus both bonus extras below.
+
 ```python
 from tritopic import TriTopic, LLMLabeler
 

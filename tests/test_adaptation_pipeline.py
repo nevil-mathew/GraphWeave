@@ -94,7 +94,7 @@ class TestAdaptAndRefit:
         np.testing.assert_allclose(model.embeddings_, original_embeddings)
 
         for key in (
-            "mode", "n_llm_calls", "n_cache_hits", "n_unparsed", "n_train_triplets",
+            "mode", "adapter", "n_llm_calls", "n_cache_hits", "n_unparsed", "n_train_triplets",
             "n_holdout_triplets", "holdout_triplet_acc_before", "holdout_triplet_acc_after",
         ):
             assert key in report
@@ -102,6 +102,19 @@ class TestAdaptAndRefit:
         assert report["mode"] == "linear"
         assert report["n_holdout_triplets"] > 0
         assert report["holdout_triplet_acc_after"] >= report["holdout_triplet_acc_before"]
+
+    def test_report_adapter_is_saveable(self, tmp_path):
+        docs, _labels, embs = _make_corpus()
+        model = _fit_model(docs, embs)
+
+        _new_model, report = adapt_and_refit(
+            model, _TextOracleLabeler(), config=_ADAPT_CONFIG, evaluate=False
+        )
+
+        save_path = str(tmp_path / "saved_adapter")
+        report["adapter"].save(save_path)
+        assert (tmp_path / "saved_adapter" / "manifest.json").exists()
+        assert (tmp_path / "saved_adapter" / "linear.npz").exists()
 
     def test_raises_on_unfitted_model(self):
         model = TriTopic()
