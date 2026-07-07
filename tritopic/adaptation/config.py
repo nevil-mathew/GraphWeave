@@ -23,6 +23,12 @@ class AdaptationConfig:
     n_docs_chars: int = 300
     holdout_frac: float = 0.2
     cache_path: str | None = None
+    # Overrides the auto-computed per-batch token budget (~20 tokens/triplet) for
+    # triplet-judgment LLM calls. Needed for reasoning-style models, which can burn the
+    # whole budget on hidden chain-of-thought before emitting the answer (surfaces as an
+    # empty completion with finish_reason="length"). None keeps the compact auto-sizing —
+    # fine for any plain instruct/flash model, which is the better fix for this task anyway.
+    llm_max_tokens: int | None = None
 
     # --- fine-tuning (sentence-transformers backend) ---
     adapter_mode: Literal["auto", "finetune", "linear"] = "auto"

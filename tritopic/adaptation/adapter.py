@@ -183,6 +183,7 @@ class EmbeddingAdapter:
             n_triplets=cfg.n_triplets, sampling=cfg.triplet_sampling,
             entropy_top_frac=cfg.entropy_top_frac, batch_size=cfg.llm_batch_size,
             holdout_frac=cfg.holdout_frac, n_docs_chars=cfg.n_docs_chars,
+            max_tokens=cfg.llm_max_tokens,
         )
         self.bank_ = bank
         return bank

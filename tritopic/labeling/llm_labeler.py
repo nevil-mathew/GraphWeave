@@ -541,6 +541,14 @@ Respond ONLY with this exact JSON format, no other text:
         )
         if self._json_object_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if self.provider == "openrouter":
+            # Some OpenRouter-routed models are reasoning-capable and can spend the whole
+            # max_tokens budget on hidden chain-of-thought before ever emitting content,
+            # surfacing as an empty completion with finish_reason="length" (the same
+            # problem _call_google avoids below via thinking_config). OpenRouter's unified
+            # "reasoning" field disables that for models that support toggling it; models
+            # that don't support disabling it just ignore the field.
+            kwargs["extra_body"] = {"reasoning": {"enabled": False}}
         response = self._client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
         if content is None:

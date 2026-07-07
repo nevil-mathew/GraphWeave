@@ -240,9 +240,20 @@ class TripletBank:
         batch_size: int = 8,
         holdout_frac: float = 0.2,
         n_docs_chars: int = 300,
+        max_tokens: int | None = None,
     ) -> "TripletBank":
         """Sample triplets, query the LLM (skipping cache hits), and append
-        judged results to :attr:`judgments`."""
+        judged results to :attr:`judgments`.
+
+        *max_tokens*, when given, overrides the auto-computed per-batch token
+        budget (``max(128, batch_size * 20 + 64)``, sized for compact
+        non-reasoning "B"/"C" answers) for every LLM call. Reasoning-style
+        models can spend their whole budget on hidden chain-of-thought before
+        ever emitting the answer, surfacing as an empty completion with
+        ``finish_reason="length"`` — pass a larger value here if you're
+        deliberately using such a model (a plain instruct/flash model that
+        doesn't need this is usually the better fix).
+        """
         if sampling == "entropy":
             triplets = sample_triplets_entropy(
                 labels, embeddings, probabilities, n_triplets,
@@ -290,9 +301,9 @@ class TripletBank:
             system_prompt, user_prompt = build_triplet_prompt(
                 batch_presented, documents, n_docs_chars=n_docs_chars
             )
-            max_tokens = max(128, len(batch_positions) * 20 + 64)
+            batch_max_tokens = max_tokens if max_tokens is not None else max(128, len(batch_positions) * 20 + 64)
             raw = labeler.call_structured(
-                system_prompt, user_prompt, schema=TRIPLET_SCHEMA, max_tokens=max_tokens
+                system_prompt, user_prompt, schema=TRIPLET_SCHEMA, max_tokens=batch_max_tokens
             )
             self.n_llm_calls += 1
             answers = parse_triplet_response(raw, len(batch_positions))

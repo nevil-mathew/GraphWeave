@@ -117,6 +117,18 @@ class _AllBLabeler:
         return json.dumps({"answers": ["B"] * n_items})
 
 
+class _RecordingLabeler:
+    """Records the max_tokens each call was made with, answers "B" always."""
+
+    def __init__(self):
+        self.max_tokens_seen: list[int] = []
+
+    def call_structured(self, system_prompt, user_prompt, schema, max_tokens=None):
+        self.max_tokens_seen.append(max_tokens)
+        n_items = user_prompt.count("Item ")
+        return json.dumps({"answers": ["B"] * n_items})
+
+
 class TestTripletBank:
     def test_all_b_labeler_canonical_positive_matches_presented_slot(self):
         labels, embs = _make_labels_embeddings()
@@ -202,3 +214,28 @@ class TestTripletBank:
         assert loaded.n_llm_calls == bank.n_llm_calls
         assert len(loaded.judgments) == len(bank.judgments)
         assert [j.anchor for j in loaded.judgments] == [j.anchor for j in bank.judgments]
+
+    def test_max_tokens_override_reaches_labeler(self):
+        labels, embs = _make_labels_embeddings()
+        docs = [f"doc{i}" for i in range(len(labels))]
+        labeler = _RecordingLabeler()
+        bank = TripletBank(random_state=42)
+        bank.collect(
+            labeler, docs, embs, labels, n_triplets=15, sampling="fast",
+            batch_size=4, max_tokens=2000,
+        )
+        assert len(labeler.max_tokens_seen) > 0
+        assert all(mt == 2000 for mt in labeler.max_tokens_seen)
+
+    def test_max_tokens_default_is_auto_sized(self):
+        labels, embs = _make_labels_embeddings()
+        docs = [f"doc{i}" for i in range(len(labels))]
+        labeler = _RecordingLabeler()
+        bank = TripletBank(random_state=42)
+        bank.collect(
+            labeler, docs, embs, labels, n_triplets=15, sampling="fast", batch_size=4,
+        )
+        assert len(labeler.max_tokens_seen) > 0
+        # auto-sized (max(128, batch_size * 20 + 64)) — not the override value from the
+        # previous test, and small, since this task's answers are compact "B"/"C" tokens.
+        assert all(mt < 500 for mt in labeler.max_tokens_seen)
