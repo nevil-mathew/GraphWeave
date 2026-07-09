@@ -1,7 +1,7 @@
 """
-Shared pytest fixtures for the TriTopic test suite.
+Shared pytest fixtures for the GraphWeave test suite.
 
-All heavy work (fitting a TriTopic model) is done once per session via
+All heavy work (fitting a GraphWeave model) is done once per session via
 session-scoped fixtures. Embeddings are precomputed blob vectors so no
 embedding model download is required.
 """
@@ -9,7 +9,7 @@ embedding model download is required.
 import numpy as np
 import pytest
 
-from tritopic import TriTopic, TriTopicConfig
+from graphweave import GraphWeave, GraphWeaveConfig
 
 _DIM = 32
 _N_TOPICS = 3
@@ -50,8 +50,8 @@ def _fake_embeddings(fake_documents):
 
 @pytest.fixture(scope="session")
 def fitted_model(fake_documents, _fake_embeddings):
-    """A fitted TriTopic model — shared across all tests in the session."""
-    cfg = TriTopicConfig(
+    """A fitted GraphWeave model — shared across all tests in the session."""
+    cfg = GraphWeaveConfig(
         use_dim_reduction=False,
         use_iterative_refinement=False,
         use_lexical_view=True,
@@ -61,6 +61,6 @@ def fitted_model(fake_documents, _fake_embeddings):
         random_state=42,
         verbose=False,
     )
-    model = TriTopic(config=cfg)
+    model = GraphWeave(config=cfg)
     model.fit(fake_documents, embeddings=_fake_embeddings)
     return model

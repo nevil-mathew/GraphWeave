@@ -1,6 +1,6 @@
-# TriTopic 2.3.0: Complete Learning Guide
+# GraphWeave 2.3.0: Complete Learning Guide
 
-A comprehensive guide to understanding how TriTopic works, where memory issues occur, and how to optimize for large datasets.
+A comprehensive guide to understanding how GraphWeave works, where memory issues occur, and how to optimize for large datasets.
 
 ---
 
@@ -8,7 +8,7 @@ A comprehensive guide to understanding how TriTopic works, where memory issues o
 
 1. [Overview](#overview)
 2. [The Memory Problem](#the-memory-problem)
-3. [TriTopic Pipeline](#tritopic-pipeline)
+3. [GraphWeave Pipeline](#graphweave-pipeline)
 4. [Leiden Consensus Clustering](#leiden-consensus-clustering)
 5. [Co-Occurrence Matrix (The Memory Bottleneck)](#co-occurrence-matrix-the-memory-bottleneck)
 6. [Iterative Refinement](#iterative-refinement)
@@ -20,7 +20,7 @@ A comprehensive guide to understanding how TriTopic works, where memory issues o
 
 ## Overview
 
-**TriTopic** is a topic modeling framework that uses:
+**GraphWeave** is a topic modeling framework that uses:
 - **Embeddings**: Convert documents to numerical vectors
 - **Graph Building**: Create similarity networks (kNN/SNN)
 - **Leiden Clustering**: Find document clusters (with consensus)
@@ -58,10 +58,10 @@ Add in scipy.linkage workspace and temporary arrays, and you hit 25-30 GB.
 Use `low_memory=True` to keep the matrix sparse (only store non-zero entries):
 
 ```python
-from tritopic import TriTopic, TriTopicConfig
+from graphweave import GraphWeave, GraphWeaveConfig
 
-config = TriTopicConfig(low_memory=True)
-model = TriTopic(config)
+config = GraphWeaveConfig(low_memory=True)
+model = GraphWeave(config)
 model.fit(documents)
 ```
 
@@ -76,7 +76,7 @@ thresholded sparse co-occurrence graph (Lancichinetti & Fortunato,
 [nature.com/articles/srep00336](https://www.nature.com/articles/srep00336)).
 
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     consensus_method="graph",          # default; new in 2.3.0
     consensus_threshold_tau=0.5,       # keep pairs that co-cluster in ≥50% of runs
 )
@@ -84,13 +84,13 @@ config = TriTopicConfig(
 
 Peak extra memory drops from ~13–17 GB (hierarchical + low_memory=True at
 43k docs) to well under 1 GB. The legacy path is still available via
-`consensus_method="hierarchical"`; install `tritopic[legacy-consensus]` to
+`consensus_method="hierarchical"`; install `graphweave[legacy-consensus]` to
 pull in `fastcluster`, which replaces `scipy.linkage` with a C++
 implementation (Θ(N²) time, no hidden float64 copy).
 
 ---
 
-## TriTopic Pipeline
+## GraphWeave Pipeline
 
 Here's what happens when you call `model.fit(documents)`:
 
@@ -140,7 +140,7 @@ embeddings to seed the similarity graph. As of 2.3.0, `knn_backend="auto"`
 The dispatch is invisible to the rest of the pipeline — mutual-kNN
 filtering, SNN counting and multi-view fusion get the same `(neighbor_id,
 similarity)` shape regardless of which backend ran. Install hnswlib via
-`pip install tritopic[fast-knn]`; if it isn't available the adaptive path
+`pip install graphweave[fast-knn]`; if it isn't available the adaptive path
 silently falls back to exact at every size. Force the exact path with
 `knn_backend="exact"` for reproducibility benchmarks.
 
@@ -150,7 +150,7 @@ Clusters → LLM → Human-readable labels
 "Topic 1: Business Development" (based on cluster contents)
 ```
 
-**Representative-doc sampling.** Before calling the LLM, TriTopic picks `n_representative_docs` per topic to send as context. The selection is controlled by `labeling_sample_strategy`:
+**Representative-doc sampling.** Before calling the LLM, GraphWeave picks `n_representative_docs` per topic to send as context. The selection is controlled by `labeling_sample_strategy`:
 
 - `"centroid"` *(default)* — closest-to-centroid only. Best for tight, coherent topics.
 - `"mmr"` — Maximal Marginal Relevance. Picks docs that are close to the centroid **and** diverse from each other (tuned by `mmr_lambda`, default 0.5). Use when centroid-closest docs are near-paraphrases and you want broader coverage without absorbing outliers.
@@ -189,7 +189,7 @@ This randomness is a feature—it helps avoid bad local optimizations.
 
 ### Why Consensus?
 
-Instead of running Leiden once, TriTopic runs it **10 times with different random seeds** to find the most robust clusters:
+Instead of running Leiden once, GraphWeave runs it **10 times with different random seeds** to find the most robust clusters:
 
 ```
 Run 1 (seed=42):  [Topic A, Topic A, Topic B, Topic B, Topic C]
@@ -216,7 +216,7 @@ Each seed produces slightly different results, capturing different "views" of th
 
 ### Stability Score
 
-After consensus clustering, TriTopic computes a **stability score**:
+After consensus clustering, GraphWeave computes a **stability score**:
 
 ```python
 model.stability_score_  # 0.0 to 1.0
@@ -461,19 +461,19 @@ print(model._iteration_history)
 
 ```
 Your computer RAM: 16 GB
-TriTopic needs: 25 GB (without optimization)
+GraphWeave needs: 25 GB (without optimization)
 Result: Out-Of-Memory crash ✗
 ```
 
 ### Solution 1: Use low_memory=True
 
 ```python
-from tritopic import TriTopic, TriTopicConfig
+from graphweave import GraphWeave, GraphWeaveConfig
 
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     low_memory=True  # ← Use sparse co-occurrence matrix
 )
-model = TriTopic(config)
+model = GraphWeave(config)
 model.fit(documents)
 ```
 
@@ -484,7 +484,7 @@ model.fit(documents)
 More iterations = more clustering = more memory spikes.
 
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     max_iterations=3,  # ← Instead of 5
     convergence_threshold=0.85  # ← Stop earlier if converged
 )
@@ -513,7 +513,7 @@ n_runs = 5  # ← Faster, less memory
 ### Solution 5: Disable Features You Don't Need
 
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     use_lexical_view=False,  # ← Don't build TF-IDF matrix
     use_metadata=False,      # ← Don't use metadata
 )
@@ -540,7 +540,7 @@ All optimizations      5 GB         3 min ✓✓
 After fitting:
 
 ```python
-model = TriTopic(config)
+model = GraphWeave(config)
 model.fit(documents)
 
 # 1. Stability Score (Leiden consensus quality)
@@ -575,12 +575,12 @@ Very many topics:      ⚠️ Resolution too high
 
 ```python
 # Try increasing Leiden runs (if memory allows)
-from tritopic.core.clustering import ConsensusLeiden
+from graphweave.core.clustering import ConsensusLeiden
 
 clusterer = ConsensusLeiden(n_runs=15)  # ← More runs
 
 # Or adjust resolution
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     resolution=0.8  # ← Try different value
 )
 ```
@@ -592,17 +592,17 @@ config = TriTopicConfig(
 ### Installation & Basic Usage
 
 ```python
-from tritopic import TriTopic, TriTopicConfig
+from graphweave import GraphWeave, GraphWeaveConfig
 
 # Optimized for large datasets
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     low_memory=True,              # Sparse co-occurrence matrix
     max_iterations=5,             # Refinement iterations
     convergence_threshold=0.90,   # Stop early if converged
     verbose=True                  # Show progress
 )
 
-model = TriTopic(config)
+model = GraphWeave(config)
 model.fit(documents)
 
 # Results
@@ -707,12 +707,12 @@ Solutions:
 
 ## Technical Details
 
-### File Locations in TriTopic
+### File Locations in GraphWeave
 
 ```
-tritopic/
+graphweave/
 ├─ core/
-│  ├─ model.py              ← Main TriTopic class + iterative refinement
+│  ├─ model.py              ← Main GraphWeave class + iterative refinement
 │  ├─ clustering.py         ← ConsensusLeiden + co-occurrence matrix
 │  ├─ graph_builder.py      ← kNN, SNN, lexical graphs
 │  └─ embeddings.py         ← Embedding models
@@ -764,7 +764,7 @@ Iterative refinement       O(n × iterations)  O(n)
 
 ## Summary
 
-**TriTopic** is a powerful topic modeling framework. The key things to understand:
+**GraphWeave** is a powerful topic modeling framework. The key things to understand:
 
 1. **Memory bottleneck**: Co-occurrence matrix during consensus clustering
 2. **Solution**: Use `low_memory=True` to use sparse matrices

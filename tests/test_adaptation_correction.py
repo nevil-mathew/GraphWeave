@@ -1,11 +1,11 @@
-"""Tests for tritopic.adaptation.correction."""
+"""Tests for graphweave.adaptation.correction."""
 
 import json
 
 import numpy as np
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.adaptation.correction import reassign_low_confidence
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.adaptation.correction import reassign_low_confidence
 
 
 def _fit_small_model():
@@ -20,12 +20,12 @@ def _fit_small_model():
     embs = np.vstack([centers[t] + 0.4 * rng.normal(size=(20, 12)) for t in range(3)])
     embs /= np.linalg.norm(embs, axis=1, keepdims=True)
 
-    cfg = TriTopicConfig(
+    cfg = GraphWeaveConfig(
         use_dim_reduction=False, use_iterative_refinement=False,
         n_consensus_runs=3, min_cluster_size=5, n_neighbors=10,
         random_state=42, verbose=False,
     )
-    return TriTopic(config=cfg).fit(docs, embeddings=embs.astype(np.float32))
+    return GraphWeave(config=cfg).fit(docs, embeddings=embs.astype(np.float32))
 
 
 class _AlwaysNoneLabeler:

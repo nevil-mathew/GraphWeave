@@ -2,9 +2,9 @@
 LLM-guided embedding adaptation — quality report
 =================================================
 
-Proof-of-concept for :mod:`tritopic.adaptation` (ClusterLLM-style triplet
+Proof-of-concept for :mod:`graphweave.adaptation` (ClusterLLM-style triplet
 fine-tuning): adapts an embedder to LLM-judged triplets, then compares the
-adapted embeddings against the baseline on the *same* TriTopic config.
+adapted embeddings against the baseline on the *same* GraphWeave config.
 
 Scenario 1 (default) uses a synthetic streaming corpus with LSA embeddings
 and a perfect **oracle** labeler (answers triplet judgments from ground
@@ -36,9 +36,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.adaptation import AdaptationConfig, adapt_and_refit
-from tritopic.cumulative.datasets import make_streaming_corpus
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.adaptation import AdaptationConfig, adapt_and_refit
+from graphweave.cumulative.datasets import make_streaming_corpus
 
 
 def hr(title: str) -> None:
@@ -50,7 +50,7 @@ def hr(title: str) -> None:
 class OracleLabeler:
     """Perfect triplet-judgment oracle for benchmarking: looks up each shown
     document snippet's ground-truth label via the same truncation
-    :func:`tritopic.labeling.llm_granularity._build_triplet_prompt` uses, so
+    :func:`graphweave.labeling.llm_granularity._build_triplet_prompt` uses, so
     no real LLM call is needed to prove the adaptation pipeline itself
     works when the judgments are noise-free.
     """
@@ -75,8 +75,8 @@ class OracleLabeler:
         return json.dumps({"answers": answers})
 
 
-def _cfg() -> TriTopicConfig:
-    return TriTopicConfig(
+def _cfg() -> GraphWeaveConfig:
+    return GraphWeaveConfig(
         use_dim_reduction=False,
         use_lexical_view=True,
         use_iterative_refinement=False,
@@ -109,7 +109,7 @@ def _run_scenario(title: str, docs: list[str], labels_true: np.ndarray, baseline
     print(f"Corpus: {len(docs)} docs, {len(np.unique(labels_true[labels_true != -1]))} true "
           f"classes, {(labels_true == -1).sum()} noise docs.\n")
 
-    model = TriTopic(config=_cfg())
+    model = GraphWeave(config=_cfg())
     model.fit(docs, embeddings=baseline_emb)
 
     labeler = OracleLabeler(docs, labels_true, n_docs_chars=300)
@@ -157,7 +157,7 @@ def scenario_synthetic() -> None:
 def scenario_20ng() -> None:
     from sklearn.datasets import fetch_20newsgroups
 
-    from tritopic.cumulative.datasets import lsa_embed
+    from graphweave.cumulative.datasets import lsa_embed
 
     cats = [0, 1, 2, 3, 4]  # 5 categories, kept small for a fast local run
     data = fetch_20newsgroups(
@@ -177,7 +177,7 @@ def scenario_20ng() -> None:
     )
     print("\nPlain English: same check on real text instead of synthetic data. Real")
     print("sentence-transformers fine-tuning (adapter_mode='finetune') is available via")
-    print('pip install "tritopic[adaptation]" but is not exercised here to keep this')
+    print('pip install "graphweave[adaptation]" but is not exercised here to keep this')
     print("report fast and dependency-light; see tests/test_adaptation_*.py for that path.")
 
 

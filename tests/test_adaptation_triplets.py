@@ -1,4 +1,4 @@
-"""Tests for tritopic.adaptation.triplets (sampling + TripletBank).
+"""Tests for graphweave.adaptation.triplets (sampling + TripletBank).
 
 No real API is ever called: fake labelers stand in for LLMLabeler, mirroring
 the pattern in tests/test_llm_granularity.py.
@@ -9,7 +9,7 @@ import json
 import numpy as np
 import pytest
 
-from tritopic.adaptation.triplets import (
+from graphweave.adaptation.triplets import (
     TripletBank,
     sample_triplets_entropy,
     sample_triplets_hard_margin,

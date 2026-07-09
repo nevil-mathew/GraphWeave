@@ -10,13 +10,13 @@ import json
 
 import pytest
 
-from tritopic import TriTopic, TriTopicConfig
+from graphweave import GraphWeave, GraphWeaveConfig
 
 
 class FakeThemeLabeler:
     """Dispatches canned responses to the proposer vs. narrative-writer calls
     based on which system prompt _propose_meta_themes / _write_meta_theme_narrative
-    use (see tritopic/core/model.py)."""
+    use (see graphweave/core/model.py)."""
 
     def __init__(self, proposer_response: str, narrative_response: str):
         self.domain_hint = None
@@ -33,7 +33,7 @@ class FakeThemeLabeler:
 
 @pytest.fixture
 def small_model(fake_documents, _fake_embeddings):
-    cfg = TriTopicConfig(
+    cfg = GraphWeaveConfig(
         use_dim_reduction=False,
         use_iterative_refinement=False,
         use_lexical_view=True,
@@ -43,7 +43,7 @@ def small_model(fake_documents, _fake_embeddings):
         random_state=42,
         verbose=False,
     )
-    model = TriTopic(config=cfg)
+    model = GraphWeave(config=cfg)
     model.fit(fake_documents, embeddings=_fake_embeddings)
     for topic in model.topics_:
         if topic.topic_id != -1:

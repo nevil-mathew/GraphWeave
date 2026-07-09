@@ -1,4 +1,4 @@
-# TriTopic Cheat Sheet
+# GraphWeave Cheat Sheet
 
 Quick reference for common tasks and concepts.
 
@@ -7,11 +7,11 @@ Quick reference for common tasks and concepts.
 ## 🚀 Quick Start
 
 ```python
-from tritopic import TriTopic, TriTopicConfig
+from graphweave import GraphWeave, GraphWeaveConfig
 
 # For large datasets (recommended)
-config = TriTopicConfig(low_memory=True)
-model = TriTopic(config)
+config = GraphWeaveConfig(low_memory=True)
+model = GraphWeave(config)
 model.fit(documents)
 
 # Access results
@@ -76,7 +76,7 @@ Legacy consensus_method="hierarchical":
 | **Diverse LLM context** | labeling_sample_strategy | `labeling_sample_strategy="mmr"` (avoids near-paraphrase docs) |
 | **Edge-aware LLM context** | labeling_sample_strategy | `labeling_sample_strategy="stratified"` (60/30/10 close/mid/far) |
 | **MMR relevance/diversity** | mmr_lambda | `mmr_lambda=0.7` (more relevance) / `0.3` (more diversity) |
-| **Adaptive kNN (default)** | knn_backend | `knn_backend="auto"` — exact under 5k, hnswlib HNSW above (needs `pip install tritopic[fast-knn]`) |
+| **Adaptive kNN (default)** | knn_backend | `knn_backend="auto"` — exact under 5k, hnswlib HNSW above (needs `pip install graphweave[fast-knn]`) |
 | **Exact kNN (reproducible)** | knn_backend | `knn_backend="exact"` (sklearn NearestNeighbors at every size) |
 | **Force HNSW** | knn_backend | `knn_backend="hnsw"` (always hnswlib; requires `fast-knn` extra) |
 | **HNSW size thresholds** | hnsw_small_threshold / hnsw_large_threshold | defaults `5_000` / `50_000` — below = exact, between = `M=16, ef=200`, at/above = `M=32, ef=400` |
@@ -168,7 +168,7 @@ Problem: Slow Processing
 ## 📝 Key Concepts
 
 ### Leiden Algorithm
-A **clustering algorithm** that groups similar items. Non-deterministic = different runs may produce different results. TriTopic runs it 10 times to find consensus.
+A **clustering algorithm** that groups similar items. Non-deterministic = different runs may produce different results. GraphWeave runs it 10 times to find consensus.
 
 ### Co-Occurrence Matrix
 Tracks "how many times did documents A and B end up in same cluster?" across all 10 Leiden runs. Used to find consensus clustering.
@@ -192,7 +192,7 @@ Controls how much to refine embeddings. Decreases over iterations (start aggress
 ### `MemoryError: Unable to allocate X GB`
 ```python
 # Fix: Use low_memory=True
-config = TriTopicConfig(low_memory=True)
+config = GraphWeaveConfig(low_memory=True)
 ```
 
 ### `IndexError in co_occurrence matrix`
@@ -205,7 +205,7 @@ config = TriTopicConfig(low_memory=True)
 ```python
 # Resolution too low, graph too weak, or bad embeddings
 # Try: Increase resolution, increase n_neighbors
-config = TriTopicConfig(resolution=1.5, n_neighbors=25)
+config = GraphWeaveConfig(resolution=1.5, n_neighbors=25)
 ```
 
 ---
@@ -223,7 +223,7 @@ def print_memory():
     print(f"Memory: {rss:.1f} GB")
 
 print_memory()
-model = TriTopic(config)
+model = GraphWeave(config)
 model.fit(documents)
 print_memory()
 ```
@@ -234,7 +234,7 @@ print_memory()
 
 ```python
 # Fastest (but lower quality)
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     low_memory=True,
     max_iterations=2,
     n_neighbors=10,
@@ -243,7 +243,7 @@ config = TriTopicConfig(
 )
 
 # Balanced (recommended)
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     low_memory=True,
     max_iterations=3,
     n_neighbors=15,
@@ -251,7 +251,7 @@ config = TriTopicConfig(
 )
 
 # Best quality (slower)
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     low_memory=True,
     max_iterations=5,
     n_neighbors=30,
@@ -267,20 +267,20 @@ config = TriTopicConfig(
 Where to find what:
 
 Iterative Refinement:
-  → tritopic/core/model.py
+  → graphweave/core/model.py
   → _refine_embeddings() method
 
 Leiden Consensus Clustering:
-  → tritopic/core/clustering.py
+  → graphweave/core/clustering.py
   → ConsensusLeiden class
   → _compute_consensus() method
 
 Co-occurrence Matrix Building:
-  → tritopic/core/clustering.py (line 137-196)
+  → graphweave/core/clustering.py (line 137-196)
   → Both low_memory=True and False paths
 
 Graph Building:
-  → tritopic/core/graph_builder.py
+  → graphweave/core/graph_builder.py
   → kNN, SNN, mutual_knn methods
 ```
 

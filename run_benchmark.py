@@ -1,5 +1,5 @@
 """
-Benchmark reproduction script: TriTopic vs BERTopic vs NMF vs LDA
+Benchmark reproduction script: GraphWeave vs BERTopic vs NMF vs LDA
 ====================================================================
 
 Reproduces the headline numbers quoted in ``README.md``'s "Benchmarks"
@@ -36,10 +36,10 @@ Embeddings (all-MiniLM-L6-v2) are computed once per dataset and cached to
 benchmarks/.cache/, exactly like benchmarks/integration_test_20ng.py.
 
 Methodology (full mode, matches README):
-- Embeddings: all-MiniLM-L6-v2 (384-dim), shared by TriTopic and BERTopic.
+- Embeddings: all-MiniLM-L6-v2 (384-dim), shared by GraphWeave and BERTopic.
 - NMF / LDA: TF-IDF (NMF) / raw counts (LDA) input, scikit-learn defaults.
 - Each model is forced to the same target topic count k via its own
-  "reduce to k" mechanism (TriTopic: n_topics=k: BERTopic: nr_topics=k;
+  "reduce to k" mechanism (GraphWeave: n_topics=k: BERTopic: nr_topics=k;
   NMF/LDA: n_components=k), evaluated across a small grid of k values
   spanning the dataset's documented k-range and averaged over --seeds
   random seeds.
@@ -59,8 +59,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import numpy as np
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.utils.metrics import compute_coherence, compute_nmi
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.utils.metrics import compute_coherence, compute_nmi
 
 CACHE_DIR = Path(__file__).parent / "benchmarks" / ".cache"
 RESULTS_DIR = Path(__file__).parent / "benchmarks" / "results"
@@ -127,7 +127,7 @@ def load_20ng(n_docs: int, seed: int) -> tuple[list[str], np.ndarray]:
 
 def load_bbc_news(n_docs: int, seed: int) -> tuple[list[str], np.ndarray]:
     if not HAVE_HF_DATASETS:
-        raise ImportError("BBC News requires `pip install datasets` (tritopic[benchmark]).")
+        raise ImportError("BBC News requires `pip install datasets` (graphweave[benchmark]).")
     ds = hf_datasets.load_dataset("SetFit/bbc-news", split="train")
     texts = list(ds["text"])
     labels = np.array(ds["label"])
@@ -136,7 +136,7 @@ def load_bbc_news(n_docs: int, seed: int) -> tuple[list[str], np.ndarray]:
 
 def load_ag_news(n_docs: int, seed: int) -> tuple[list[str], np.ndarray]:
     if not HAVE_HF_DATASETS:
-        raise ImportError("AG News requires `pip install datasets` (tritopic[benchmark]).")
+        raise ImportError("AG News requires `pip install datasets` (graphweave[benchmark]).")
     ds = hf_datasets.load_dataset("fancyzhx/ag_news", split="train")
     texts = list(ds["text"])
     labels = np.array(ds["label"])
@@ -145,7 +145,7 @@ def load_ag_news(n_docs: int, seed: int) -> tuple[list[str], np.ndarray]:
 
 def load_arxiv(n_docs: int, seed: int) -> tuple[list[str], np.ndarray]:
     if not HAVE_HF_DATASETS:
-        raise ImportError("Arxiv requires `pip install datasets` (tritopic[benchmark]).")
+        raise ImportError("Arxiv requires `pip install datasets` (graphweave[benchmark]).")
     ds = hf_datasets.load_dataset("ccdv/arxiv-classification", "no_ref", split="train")
     texts = [t[:4000] for t in ds["text"]]  # abstracts+body can be long; cap for speed
     labels = np.array(ds["label"])
@@ -188,9 +188,9 @@ def _top_words(vectorizer, component_row: np.ndarray, n: int = 10) -> list[str]:
     return [vocab[i] for i in top_idx]
 
 
-def run_tritopic(docs: list[str], embeddings: np.ndarray, k: int, seed: int):
-    config = TriTopicConfig(random_state=seed, verbose=False)
-    model = TriTopic(n_topics=k, config=config)
+def run_graphweave(docs: list[str], embeddings: np.ndarray, k: int, seed: int):
+    config = GraphWeaveConfig(random_state=seed, verbose=False)
+    model = GraphWeave(n_topics=k, config=config)
     model.fit(docs, embeddings=embeddings)
     keywords = [t.keywords for t in model.topics_ if t.topic_id != -1]
     return model.labels_, keywords
@@ -245,7 +245,7 @@ def run_lda(docs: list[str], k: int, seed: int):
 
 
 MODEL_RUNNERS = {
-    "TriTopic": lambda docs, emb, k, seed: run_tritopic(docs, emb, k, seed),
+    "GraphWeave": lambda docs, emb, k, seed: run_graphweave(docs, emb, k, seed),
     "BERTopic": lambda docs, emb, k, seed: run_bertopic(docs, emb, k, seed),
     "NMF": lambda docs, emb, k, seed: run_nmf(docs, k, seed),
     "LDA": lambda docs, emb, k, seed: run_lda(docs, k, seed),
@@ -272,7 +272,7 @@ def k_grid_for(k_range: tuple[int, int], n_points: int) -> list[int]:
 def run_full_benchmark(dataset_keys: list[str], seeds: int, k_grid_points: int, sample_seed: int) -> dict:
     models = dict(MODEL_RUNNERS)
     if not HAVE_BERTOPIC:
-        warnings.warn("bertopic not installed — skipping BERTopic (`pip install tritopic[benchmark]`).")
+        warnings.warn("bertopic not installed — skipping BERTopic (`pip install graphweave[benchmark]`).")
         models.pop("BERTopic")
 
     all_results: dict[str, dict[str, list[dict]]] = {}
@@ -307,7 +307,7 @@ def run_full_benchmark(dataset_keys: list[str], seeds: int, k_grid_points: int, 
 
 def run_quick_smoke() -> dict:
     """Synthetic, in-memory, no-download sanity check of the same code paths."""
-    from tritopic.cumulative.datasets import make_streaming_corpus
+    from graphweave.cumulative.datasets import make_streaming_corpus
 
     hr("QUICK SMOKE TEST (synthetic corpus, no downloads)")
     corp = make_streaming_corpus(n_topics=5, docs_per_batch=200, n_batches=1, random_state=7)

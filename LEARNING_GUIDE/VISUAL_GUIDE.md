@@ -1,4 +1,4 @@
-# TriTopic Visual Guide
+# GraphWeave Visual Guide
 
 Diagrams, flowcharts, and visual explanations.
 
