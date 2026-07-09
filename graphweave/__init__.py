@@ -41,19 +41,19 @@ from graphweave.visualization.plotter import TopicVisualizer
 from graphweave.cumulative.cumulative import CumulativeGraphWeave, CumulativeConfig
 
 __all__ = [
+    "ConsensusLeiden",
+    "CumulativeConfig",
+    "CumulativeGraphWeave",
+    "EmbeddingEngine",
+    "GraphBuilder",
     "GraphWeave",
     "GraphWeaveConfig",
-    "TopicInfo",
-    "ReportTheme",
-    "TopicNode",
-    "TopicHierarchy",
-    "GraphBuilder",
-    "ConsensusLeiden",
-    "EmbeddingEngine",
     "KeywordExtractor",
     "LLMLabeler",
+    "ReportTheme",
     "SimpleLabeler",
+    "TopicHierarchy",
+    "TopicInfo",
+    "TopicNode",
     "TopicVisualizer",
-    "CumulativeGraphWeave",
-    "CumulativeConfig",
 ]

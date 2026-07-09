@@ -272,7 +272,10 @@ def k_grid_for(k_range: tuple[int, int], n_points: int) -> list[int]:
 def run_full_benchmark(dataset_keys: list[str], seeds: int, k_grid_points: int, sample_seed: int) -> dict:
     models = dict(MODEL_RUNNERS)
     if not HAVE_BERTOPIC:
-        warnings.warn("bertopic not installed — skipping BERTopic (`pip install graphweave[benchmark]`).")
+        warnings.warn(
+            "bertopic not installed — skipping BERTopic (`pip install graphweave[benchmark]`).",
+            stacklevel=2,
+        )
         models.pop("BERTopic")
 
     all_results: dict[str, dict[str, list[dict]]] = {}

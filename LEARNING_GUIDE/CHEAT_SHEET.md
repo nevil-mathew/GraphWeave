@@ -9,8 +9,9 @@ Quick reference for common tasks and concepts.
 ```python
 from graphweave import GraphWeave, GraphWeaveConfig
 
-# For large datasets (recommended)
-config = GraphWeaveConfig(low_memory=True)
+# For large datasets (recommended) — graph consensus is the default
+# and is memory-safe out of the box, no config needed
+config = GraphWeaveConfig()
 model = GraphWeave(config)
 model.fit(documents)
 

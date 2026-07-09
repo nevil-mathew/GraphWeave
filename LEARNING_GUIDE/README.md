@@ -709,7 +709,7 @@ Solutions:
 
 ### File Locations in GraphWeave
 
-```
+```text
 graphweave/
 ├─ core/
 │  ├─ model.py              ← Main GraphWeave class + iterative refinement

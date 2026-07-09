@@ -546,7 +546,7 @@ Quality is at least as good — the LF paper shows graph consensus improves stab
 | Any size, default install | **Nothing.** The default is already memory-safe with automatic float32, early pruning, and capped parallelism. |
 | You want stricter / looser consensus | Tune `consensus_threshold_tau` in `[0.3, 0.8]`. Higher τ = stricter (fewer, tighter topics). |
 | You want bit-for-bit identical results to the legacy hierarchical path | Set `consensus_method="hierarchical"`. See below. |
-| You still hit an OOM crash | Lower `n_consensus_runs` (e.g. 5) or lower `consensus_threshold_tau` (e.g. 0.3, more aggressive pruning). |
+| You still hit an OOM crash | Lower `n_consensus_runs` (e.g. 5) or raise `consensus_threshold_tau` (e.g. 0.7, more aggressive pruning). |
 
 ### Tuning the consensus threshold τ
 
