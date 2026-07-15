@@ -40,7 +40,7 @@ print(f"Stability: {model.stability_score_:.3f}")
 ```
 Default consensus_method="graph" (Lancichinetti-Fortunato):
   ✓ Sparse co-occurrence + Leiden on thresholded graph
-  └─ Peak: ~2-3 GB even at 43k docs
+  └─ Consensus-step peak: <1 GB at 43k docs (README benchmark: ~0.3 GB @ 20k, ~0.8 GB @ 50k)
   └─ scipy.linkage is NOT called
   └─ Reference: Sci. Rep. 2:336 (2012)
 
@@ -62,7 +62,7 @@ Legacy consensus_method="hierarchical":
 
 | Goal | Setting | Code |
 |------|---------|------|
-| **Large dataset** | low_memory | `low_memory=True` |
+| **Large dataset** | *(nothing to set)* | Default `consensus_method="graph"` is already memory-safe |
 | **Fast processing** | max_iterations | `max_iterations=3` |
 | **More topics** | resolution | `resolution=1.5` |
 | **Fewer topics** | resolution | `resolution=0.5` |
@@ -117,8 +117,13 @@ Bad sign: ARI decreases or stays low
 
 ## 💾 Memory Quick Estimate
 
+With the default `consensus_method="graph"`, none of this applies — consensus-step peak memory
+stays under 1 GB through tens of thousands of docs and only ~2 GB even at 100k+ (see README's
+"Memory Optimization for Large Datasets" for the exact benchmark table). The math below is for
+the **legacy** `consensus_method="hierarchical"` path only:
+
 ```
-For N documents with low_memory=False:
+Legacy hierarchical path, with low_memory=False:
 
 Memory = (N × N × 8 bytes) / 1e9 GB
 
@@ -128,7 +133,8 @@ Examples:
   43k docs:   43k × 43k × 8 / 1e9 = 14.7 GB ✗
   50k docs:   50k × 50k × 8 / 1e9 = 20 GB ✗✗
 
-Rule of thumb: >30k docs → MUST use low_memory=True
+Rule of thumb (legacy hierarchical path only): >30k docs → MUST use low_memory=True.
+On the default graph-consensus path this doesn't apply — there's no N×N densification.
 ```
 
 ---
@@ -137,7 +143,8 @@ Rule of thumb: >30k docs → MUST use low_memory=True
 
 ```
 Problem: Out of Memory
-□ Set low_memory=True
+□ Confirm you're on the default consensus_method="graph" (memory-safe already)
+□ If deliberately using consensus_method="hierarchical", set low_memory=True
 □ Reduce max_iterations
 □ Reduce dataset size
 □ Close other applications
@@ -192,8 +199,9 @@ Controls how much to refine embeddings. Decreases over iterations (start aggress
 
 ### `MemoryError: Unable to allocate X GB`
 ```python
-# Fix: Use low_memory=True
-config = GraphWeaveConfig(low_memory=True)
+# This shouldn't happen on the default consensus_method="graph" path.
+# If you're intentionally on the legacy hierarchical path, fix with:
+config = GraphWeaveConfig(consensus_method="hierarchical", low_memory=True)
 ```
 
 ### `IndexError in co_occurrence matrix`
@@ -233,10 +241,12 @@ print_memory()
 
 ## ⚡ Performance Tips
 
+These use the default `consensus_method="graph"` — `low_memory` is not needed and has no
+effect on this path.
+
 ```python
 # Fastest (but lower quality)
 config = GraphWeaveConfig(
-    low_memory=True,
     max_iterations=2,
     n_neighbors=10,
     reduced_dims=30,
@@ -245,7 +255,6 @@ config = GraphWeaveConfig(
 
 # Balanced (recommended)
 config = GraphWeaveConfig(
-    low_memory=True,
     max_iterations=3,
     n_neighbors=15,
     reduced_dims=50,
@@ -253,7 +262,6 @@ config = GraphWeaveConfig(
 
 # Best quality (slower)
 config = GraphWeaveConfig(
-    low_memory=True,
     max_iterations=5,
     n_neighbors=30,
     reduced_dims=100,
@@ -274,15 +282,19 @@ Iterative Refinement:
 Leiden Consensus Clustering:
   → graphweave/core/clustering.py
   → ConsensusLeiden class
-  → _compute_consensus() method
+  → _compute_consensus() method (default: graph consensus path)
 
-Co-occurrence Matrix Building:
-  → graphweave/core/clustering.py (line 137-196)
-  → Both low_memory=True and False paths
+Legacy hierarchical / low_memory paths:
+  → graphweave/core/clustering.py
+  → only reachable via consensus_method="hierarchical"
 
 Graph Building:
   → graphweave/core/graph_builder.py
   → kNN, SNN, mutual_knn methods
+
+Embedding Adaptation:
+  → graphweave/adaptation/
+  → LinearAdapter (pure-numpy) and EmbeddingAdapter (sentence-transformers fine-tuning)
 ```
 
 ---
@@ -292,7 +304,7 @@ Graph Building:
 Before running on large dataset:
 
 ```
-□ Using low_memory=True?
+□ On the default consensus_method="graph"? (no memory config needed)
 □ Checked RAM available?
 □ Set max_iterations reasonably?
 □ Disabled unused features?
@@ -315,7 +327,9 @@ Before running on large dataset:
 
 ## 💡 Remember
 
-1. **For 30k+ documents**: ALWAYS use `low_memory=True`
+1. **Default `consensus_method="graph"` is memory-safe out of the box** — no config needed,
+   even at 40k+ documents. `low_memory=True` only matters if you opt into the legacy
+   `consensus_method="hierarchical"` path.
 2. **Stability > 0.8**: Good sign ✓
 3. **ARI increasing**: Converging correctly ✓
 4. **Iterations usually converge**: By iteration 3-4, diminishing returns

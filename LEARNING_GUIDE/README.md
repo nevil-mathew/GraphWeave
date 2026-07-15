@@ -10,7 +10,7 @@ A comprehensive guide to understanding how GraphWeave works, where memory issues
 2. [The Memory Problem](#the-memory-problem)
 3. [GraphWeave Pipeline](#graphweave-pipeline)
 4. [Leiden Consensus Clustering](#leiden-consensus-clustering)
-5. [Co-Occurrence Matrix (The Memory Bottleneck)](#co-occurrence-matrix-the-memory-bottleneck)
+5. [Co-Occurrence Matrix (The Memory Bottleneck, Legacy Hierarchical Path)](#co-occurrence-matrix-the-memory-bottleneck-legacy-hierarchical-path)
 6. [Iterative Refinement](#iterative-refinement)
 7. [Memory Optimization](#memory-optimization)
 8. [Measuring Stability](#measuring-stability)
@@ -33,9 +33,15 @@ The main challenge: **Memory usage during consensus clustering** can cause Out-O
 
 ## The Memory Problem
 
-### The Issue
+> **This describes why the co-occurrence matrix was a bottleneck before GraphWeave 2.3.0.**
+> Since 2.3.0, the default `consensus_method="graph"` (see "The Solution" below) avoids the
+> problem entirely — peak extra memory stays under 1 GB through tens of thousands of docs. Read
+> on for the historical context that motivates the default, or jump straight to "The Solution".
 
-When processing **43,000 documents**, memory usage spikes to **25+ GB** during clustering.
+### The Issue (legacy hierarchical path, `low_memory=False`)
+
+When processing **43,000 documents** on the legacy `consensus_method="hierarchical"` path with
+`low_memory=False`, memory usage spikes to **25+ GB** during clustering.
 
 ```
 Before clustering:     2-3 GB (normal)
@@ -43,9 +49,9 @@ During clustering:     25+ GB (SPIKE)
 After clustering:      2-3 GB (freed)
 ```
 
-### Why It Happens
+### Why It Happens (legacy hierarchical path)
 
-The **consensus clustering step** builds a co-occurrence matrix that tracks which documents clustered together across multiple Leiden runs. When `low_memory=False`, this becomes a **43,000 × 43,000 dense table**:
+The **consensus clustering step** builds a co-occurrence matrix that tracks which documents clustered together across multiple Leiden runs. On the legacy `consensus_method="hierarchical"` path with `low_memory=False`, this becomes a **43,000 × 43,000 dense table**:
 
 - **Cells**: 43,000 × 43,000 = 1.8 billion
 - **Memory per cell**: 8 bytes (float64)
@@ -53,40 +59,49 @@ The **consensus clustering step** builds a co-occurrence matrix that tracks whic
 
 Add in scipy.linkage workspace and temporary arrays, and you hit 25-30 GB.
 
-### The Solution
+### The Solution (default since 2.3.0): graph consensus
 
-Use `low_memory=True` to keep the matrix sparse (only store non-zero entries):
+You don't need to configure anything — `consensus_method="graph"` is the
+**default**. It replaces the N×N co-occurrence densification *and* the
+`scipy.linkage` step with a single Leiden pass on a thresholded sparse
+co-occurrence graph (Lancichinetti & Fortunato, *Consensus clustering in
+complex networks*, Sci. Rep. 2:336, 2012 —
+[nature.com/articles/srep00336](https://www.nature.com/articles/srep00336)).
 
 ```python
 from graphweave import GraphWeave, GraphWeaveConfig
 
-config = GraphWeaveConfig(low_memory=True)
+config = GraphWeaveConfig()   # consensus_method="graph" is already the default
 model = GraphWeave(config)
-model.fit(documents)
+model.fit(documents)          # peak extra memory well under 1 GB, even at 43k docs
 ```
 
-This reduces memory from **25 GB → 10 GB**.
+Tune agreement strictness with `consensus_threshold_tau` (default 0.5 — keep
+pairs that co-cluster in ≥50% of runs) if you want stricter/looser consensus;
+it has no memory cost either way.
 
-### Better solution (2.3.0+): graph consensus
+### Legacy path: `consensus_method="hierarchical"` + `low_memory`
 
-The default `consensus_method="graph"` replaces the N×N co-occurrence
-densification *and* the `scipy.linkage` step with a single Leiden pass on a
-thresholded sparse co-occurrence graph (Lancichinetti & Fortunato,
-*Consensus clustering in complex networks*, Sci. Rep. 2:336, 2012 —
-[nature.com/articles/srep00336](https://www.nature.com/articles/srep00336)).
+Before 2.3.0, the only lever was `low_memory=True`, which kept the
+co-occurrence matrix sparse instead of densifying it:
 
 ```python
 config = GraphWeaveConfig(
-    consensus_method="graph",          # default; new in 2.3.0
-    consensus_threshold_tau=0.5,       # keep pairs that co-cluster in ≥50% of runs
+    consensus_method="hierarchical",
+    low_memory=True,
 )
 ```
 
-Peak extra memory drops from ~13–17 GB (hierarchical + low_memory=True at
-43k docs) to well under 1 GB. The legacy path is still available via
-`consensus_method="hierarchical"`; install `graphweave[legacy-consensus]` to
-pull in `fastcluster`, which replaces `scipy.linkage` with a C++
-implementation (Θ(N²) time, no hidden float64 copy).
+This reduces memory from **25 GB → 10 GB** — still far worse than the
+default graph path's <1 GB. Only use this path if you need reproducibility
+against older GraphWeave/tritopic results, or specifically want
+`scipy.linkage`-based hierarchical clustering. Install
+`graphweave[legacy-consensus]` to pull in `fastcluster`, which replaces
+`scipy.linkage` with a C++ implementation (Θ(N²) time, no hidden float64
+copy) when you do use this path.
+
+**On the default graph path, `low_memory` has no effect at all** — it only
+applies inside the hierarchical path above.
 
 ---
 
@@ -240,7 +255,10 @@ if model.stability_score_ < 0.7:
 
 ---
 
-## Co-Occurrence Matrix (The Memory Bottleneck)
+## Co-Occurrence Matrix (The Memory Bottleneck, Legacy Hierarchical Path)
+
+> This whole section describes the pre-2.3.0 / legacy hierarchical path. The default
+> `consensus_method="graph"` never builds this matrix — see "The Memory Problem" above.
 
 ### What Is It?
 
@@ -333,11 +351,9 @@ This is HUGE! Your system might only have 16 GB total.
 ### Dense Path (low_memory=False)
 
 ```python
-# Line 189 in clustering.py
+# In graphweave/core/clustering.py
 co_occur_dense = co_occur.toarray() / n_runs  # ← Creates full 14 GB matrix!
-
-# Line 196
-condensed = squareform(distance)  # ← Creates another 7 GB!
+condensed = squareform(distance)              # ← Creates another 7 GB!
 
 # PEAK: 20+ GB (plus scipy workspace)
 ```
@@ -345,15 +361,13 @@ condensed = squareform(distance)  # ← Creates another 7 GB!
 ### Sparse Path (low_memory=True)
 
 ```python
-# Line 171 in clustering.py
+# In graphweave/core/clustering.py
 condensed = np.ones(n_pairs, dtype=np.float64)  # ← Only allocate needed space (7 GB)
 
-# Lines 175-181
 # Fill only the non-zero entries from sparse matrix
 mask = coo.row < coo.col
 condensed[idx] = 1.0 - v
 
-# Line 184
 del co_occur, coo  # ← Free sparse matrix before scipy uses memory
 
 # PEAK: 10 GB (much better!)
@@ -465,19 +479,32 @@ GraphWeave needs: 25 GB (without optimization)
 Result: Out-Of-Memory crash ✗
 ```
 
-### Solution 1: Use low_memory=True
+### Solution 0 (do this first): use the default graph consensus
 
 ```python
 from graphweave import GraphWeave, GraphWeaveConfig
 
+config = GraphWeaveConfig()   # consensus_method="graph" is already the default
+model = GraphWeave(config)
+model.fit(documents)
+```
+
+**Result**: 25 GB → well under 1 GB ✓ — no further tuning needed for memory alone.
+
+### Solution 1 (legacy path only): use low_memory=True
+
+Only relevant if you've opted into `consensus_method="hierarchical"`:
+
+```python
 config = GraphWeaveConfig(
-    low_memory=True  # ← Use sparse co-occurrence matrix
+    consensus_method="hierarchical",
+    low_memory=True,  # ← Use sparse co-occurrence matrix
 )
 model = GraphWeave(config)
 model.fit(documents)
 ```
 
-**Result**: 25 GB → 10 GB ✓
+**Result**: 25 GB → 10 GB ✓ (still worse than the default graph path)
 
 ### Solution 2: Reduce Iterations
 
@@ -522,13 +549,17 @@ config = GraphWeaveConfig(
 ### Memory Comparison
 
 ```
-Configuration          Peak Memory  Time
-─────────────────────────────────────────
-Default (50k docs)     25 GB        Crash ✗
-+ low_memory=True      10 GB        10 min ✓
-+ max_iterations=3     7-10 GB      6 min ✓
-+ sample 20k docs      15 GB        5 min ✓
-All optimizations      5 GB         3 min ✓✓
+Configuration                          Peak Memory  Time
+──────────────────────────────────────────────────────────
+Default graph consensus (50k docs)     <1 GB        10 min ✓ (default since 2.3.0)
++ max_iterations=3                     <1 GB        6 min ✓
+
+Legacy consensus_method="hierarchical" (50k docs):
+  low_memory=False                     25 GB        Crash ✗
+  + low_memory=True                    10 GB        10 min ✓
+  + max_iterations=3                   7-10 GB      6 min ✓
+  + sample 20k docs                    15 GB        5 min ✓
+  All optimizations                    5 GB         3 min ✓✓
 ```
 
 ---
@@ -594,9 +625,9 @@ config = GraphWeaveConfig(
 ```python
 from graphweave import GraphWeave, GraphWeaveConfig
 
-# Optimized for large datasets
+# Optimized for large datasets — consensus_method="graph" (default) is
+# already memory-safe; low_memory only matters on the legacy hierarchical path
 config = GraphWeaveConfig(
-    low_memory=True,              # Sparse co-occurrence matrix
     max_iterations=5,             # Refinement iterations
     convergence_threshold=0.90,   # Stop early if converged
     verbose=True                  # Show progress
@@ -645,12 +676,14 @@ print(f"Cluster sizes: {dict(zip(unique, counts))}")
 
 | Parameter | Impact | Default | Notes |
 |-----------|--------|---------|-------|
-| `low_memory` | Memory usage | False | **CRITICAL: Set to True for >30k docs** |
+| `consensus_method` | Consensus memory/algo | `"graph"` | Default is already memory-safe; `"hierarchical"` is the legacy path |
+| `low_memory` | Memory usage | False | Only matters if `consensus_method="hierarchical"`; no effect on the default `"graph"` path |
 | `max_iterations` | Convergence | 5 | More = slower but better, 3 often enough |
 | `convergence_threshold` | Early stop | 0.95 | Lower = stop earlier (saves time) |
 | `resolution` | Num topics | auto | Higher = more clusters, lower = fewer |
 | `n_neighbors` | Graph density | 15 | Higher = slower, more connections |
 | `reduced_dims` | Graph speed | 50 | Lower = faster but less info |
+| `min_cluster_fraction` | Min cluster size (scale-invariant) | None | Alternative to `min_cluster_size`; expressed as a fraction of corpus size, see main README |
 
 ---
 
@@ -660,7 +693,9 @@ print(f"Cluster sizes: {dict(zip(unique, counts))}")
 
 ```
 Error: MemoryError during clustering
-Solution: Set low_memory=True
+Check first: are you on consensus_method="hierarchical"? That's the only
+path where this should happen. Switch to the default consensus_method="graph"
+(or add low_memory=True if you must stay on the hierarchical path).
 ```
 
 ### Instability (Stability < 0.6)
@@ -731,8 +766,9 @@ UMAP reduction     12 GB     (temporary both versions)
 Iteration 1-5
   Graph build      2 GB      (temporary)
   Leiden runs      3 GB      (temporary)
-  Consensus:       25 GB     ← SPIKE (with low_memory=False)
-                   10 GB     ← SPIKE (with low_memory=True)
+  Consensus:       <1 GB     ← default consensus_method="graph"
+                   25 GB     ← legacy hierarchical path, low_memory=False
+                   10 GB     ← legacy hierarchical path, low_memory=True
   Refinement       4 GB      (temporary)
 Cleanup            3 GB
 ```
@@ -740,15 +776,16 @@ Cleanup            3 GB
 ### Complexity Analysis
 
 ```
-Operation                   Time Complexity    Space Complexity
-──────────────────────────────────────────────────────────────
-Building embeddings         O(d × n)           O(d × n)
-UMAP reduction             O(n log n)         O(n)
-Leiden clustering          O(m + n log n)     O(m)  (m=edges)
-Co-occurrence (sparse)     O(10n + k)         O(k)  (k=non-zero)
-Co-occurrence (dense)      O(10n²)            O(n²) ← BOTTLENECK
-Hierarchical clustering    O(n² log n)        O(n²)
-Iterative refinement       O(n × iterations)  O(n)
+Operation                        Time Complexity    Space Complexity
+──────────────────────────────────────────────────────────────────
+Building embeddings              O(d × n)           O(d × n)
+UMAP reduction                  O(n log n)         O(n)
+Leiden clustering                O(m + n log n)     O(m)  (m=edges)
+Consensus (graph, default)       O(m log n)         O(m)  (thresholded co-cluster graph)
+Co-occurrence (sparse, legacy)   O(10n + k)         O(k)  (k=non-zero)
+Co-occurrence (dense, legacy)    O(10n²)            O(n²) ← BOTTLENECK
+Hierarchical clustering (legacy) O(n² log n)        O(n²)
+Iterative refinement             O(n × iterations)  O(n)
 ```
 
 ---
@@ -762,14 +799,29 @@ Iterative refinement       O(n × iterations)  O(n)
 
 ---
 
+## Newer Features (see main README for full detail)
+
+This guide focuses on the core pipeline and memory model. A few things added since this guide
+was first written are documented in `README.md` rather than duplicated here:
+
+| Feature | What it does | README section |
+|---------|---------------|-----------------|
+| LLM-guided embedding adaptation | Fine-tune embeddings via LLM-judged triplets (`graphweave.adaptation`); pure-numpy `LinearAdapter` or full `EmbeddingAdapter` | "LLM-Guided Embedding Adaptation" |
+| LLM-guided granularity calibration | Let an LLM help pick `resolution`/cluster granularity instead of guessing | "LLM-Guided Granularity Calibration" |
+| Report Themes | Synthesize all per-topic labels into a handful of narrative meta-themes for a findings report (`generate_report_themes`, `export_report`) | "Report Themes (qualitative research output)" |
+| `llm_max_tokens` | Override auto-computed token budget for LLM calls — needed for reasoning models that burn budget on hidden chain-of-thought | "LLM-Powered Labels" |
+
 ## Summary
 
 **GraphWeave** is a powerful topic modeling framework. The key things to understand:
 
-1. **Memory bottleneck**: Co-occurrence matrix during consensus clustering
-2. **Solution**: Use `low_memory=True` to use sparse matrices
+1. **Default consensus (`consensus_method="graph"`, 2.3.0+)** is memory-safe out of the box —
+   peak extra memory stays under 1 GB regardless of corpus size.
+2. **Legacy path**: the old co-occurrence-matrix bottleneck and `low_memory=True` only apply if
+   you explicitly opt into `consensus_method="hierarchical"`.
 3. **Iterative refinement**: Embeddings improve over iterations (usually converges by iteration 3-4)
 4. **Stability**: Check `model.stability_score_` to ensure robust clustering
 5. **Configuration**: Adjust resolution, iterations, and features based on your dataset
 
-For 30k+ documents, **always use `low_memory=True`** to avoid OOM crashes.
+For 30k+ documents on the default path, there's nothing special to configure for memory. Only
+reach for `low_memory=True` if you've deliberately switched to `consensus_method="hierarchical"`.

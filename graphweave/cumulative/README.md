@@ -673,7 +673,8 @@ The first run caches embeddings to `benchmarks/.cache/`. What it validates:
   new categories → novelty spikes → recluster fires → new topics discovered.
 - **Strategy comparison** — `global_refit` vs `coreset` vs `batch_merge` on real text.
 - **Bigger picture** — 3-level hierarchy on 18k docs with real embeddings.
-- **Memory** — `low_memory=True` avoids the 18k×18k dense matrix (~2.7 GB).
+- **Memory** — default `consensus_method="graph"` avoids the 18k×18k dense matrix entirely
+  (`low_memory` only matters if you opt into the legacy `consensus_method="hierarchical"` path).
 
 **Run the lightweight pytest version** (real 20NG text, LSA embeddings, no torch, ~15 s):
 

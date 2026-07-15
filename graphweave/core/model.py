@@ -152,11 +152,15 @@ class GraphWeaveConfig:
     random_state: int = 42
     verbose: bool = True
 
-    # Memory optimization (opt-in).  When True, _compute_consensus builds the
-    # condensed distance directly from the sparse co-occurrence (float32)
-    # instead of materializing the N×N dense matrix, and _fit_iterative
-    # caches the lexical graph across iterations.  Output is numerically
-    # equivalent to the default path; enable for large-N OOM avoidance.
+    # Memory optimization (opt-in).  Only takes effect when
+    # consensus_method="hierarchical" below -- on the default "graph" path
+    # _compute_consensus never builds the dense matrix in the first place, so
+    # this flag is read but has no effect.  When True on the hierarchical
+    # path, _compute_consensus builds the condensed distance directly from
+    # the sparse co-occurrence (float32) instead of materializing the N×N
+    # dense matrix, and _fit_iterative caches the lexical graph across
+    # iterations.  Output is numerically equivalent to the dense hierarchical
+    # path; enable for large-N OOM avoidance if you need consensus_method="hierarchical".
     low_memory: bool = False
 
     # Consensus strategy for ConsensusLeiden.

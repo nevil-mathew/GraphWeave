@@ -55,6 +55,11 @@ breakdown and how to reproduce it.
 **Scaling up**
 [Cumulative / Batch-wise Clustering](graphweave/cumulative/README.md)
 
+**Going deeper**
+[Learning Guide](LEARNING_GUIDE/README.md) (pipeline internals, memory model, cheat sheet, visual guide) ·
+[Cheat Sheet](LEARNING_GUIDE/CHEAT_SHEET.md) ·
+[Visual Guide](LEARNING_GUIDE/VISUAL_GUIDE.md)
+
 **Visualizing & evaluating**
 [Visualizations](#visualizations) ·
 [Evaluation](#evaluation)
@@ -147,6 +152,24 @@ git clone https://github.com/nevil-mathew/topic-extraction-poc.git
 cd topic-extraction-poc
 pip install -e ".[dev]"
 ```
+
+### Which extra do I need?
+
+| I want to... | Install |
+|---|---|
+| Just cluster documents (no LLM, no GPU) | `pip install graphweave` |
+| Generate LLM topic labels / calibration / report themes | `pip install graphweave[llm]` |
+| Fine-tune embeddings with LLM-guided triplets | `pip install graphweave[adaptation]` |
+| Speed up kNN search on large corpora (HNSW) | `pip install graphweave[fast-knn]` |
+| Use a GPU (cosine similarity, kNN, refinement) | `pip install graphweave[gpu]` |
+| Run `run_benchmark.py` against BERTopic/LDA/NMF | `pip install graphweave[benchmark]` |
+| Use the legacy `consensus_method="hierarchical"` path with `fastcluster` | `pip install graphweave[legacy-consensus]` |
+| LLM + fast-knn + GPU + adaptation, all at once | `pip install graphweave[full]` |
+| Contribute to GraphWeave itself (tests, lint, type-check) | `pip install -e ".[dev]"` |
+
+`full` bundles `llm`, `fast-knn`, `gpu`, and `adaptation` — it does **not** include
+`legacy-consensus` or `benchmark`, which pull in extra dependencies (`fastcluster`, `bertopic`)
+that most users never need. Install those two separately if you want them.
 
 ### Dependencies
 

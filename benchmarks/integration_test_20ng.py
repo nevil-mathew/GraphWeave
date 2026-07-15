@@ -161,7 +161,8 @@ def base_cfg() -> GraphWeaveConfig:
         use_iterative_refinement=False,  # 3× speedup; marginal loss at this scale
         n_consensus_runs=5,
         min_cluster_size=15,             # appropriate for ~3k-doc batches
-        low_memory=True,                 # CRITICAL: avoids 18k×18k matrix (~2.7 GB)
+        # consensus_method left at default "graph": avoids the 18k×18k dense
+        # matrix entirely (low_memory has no effect on this path, so it's omitted).
         n_neighbors=15,
         random_state=42,
         verbose=False,
@@ -302,7 +303,7 @@ def footer(t_total: float) -> None:
     print(f"  Total runtime    : {t_total/60:.1f} min")
     print(f"  Peak RAM         : {rss_mb():.0f} MB")
     print(f"  HNSW backend     : {hnsw_status}")
-    print(f"  low_memory=True  : graph-consensus path (avoids 18k×18k matrix)")
+    print(f"  Consensus        : default graph-consensus path (avoids 18k×18k matrix)")
     print()
     print("  Interpretation:")
     print("  · Drift fires when new categories appear → recluster discovers new topics.")
