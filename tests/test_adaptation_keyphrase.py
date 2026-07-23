@@ -74,5 +74,20 @@ def test_keyphrase_expand_embeddings_empty_keyphrases_unblended():
 def test_keyphrase_expand_embeddings_concat_mode():
     docs = ["hello world"]
     keyphrases = [["greeting", "hi"]]
-    out = keyphrase_expand_embeddings(docs, keyphrases, _DuckEncoder(), mode="concat_encode")
+    encoder = _DuckEncoder()
+
+    # The raw re-encoding of "doc + keyphrases" is not unit norm.
+    raw = encoder.encode([docs[0] + "\nKeyphrases: greeting, hi"])
+
+    # normalize=False returns the encoder output untouched.
+    unnormed = keyphrase_expand_embeddings(
+        docs, keyphrases, encoder, mode="concat_encode", normalize=False
+    )
+    assert unnormed.shape == (1, 2)
+    np.testing.assert_allclose(unnormed, raw, atol=1e-8)
+
+    # normalize defaults to True — same contract as the "average" path.
+    out = keyphrase_expand_embeddings(docs, keyphrases, encoder, mode="concat_encode")
     assert out.shape == (1, 2)
+    np.testing.assert_allclose(np.linalg.norm(out, axis=1), [1.0], atol=1e-8)
+    np.testing.assert_allclose(out, raw / np.linalg.norm(raw, axis=1, keepdims=True), atol=1e-8)

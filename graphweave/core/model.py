@@ -2442,10 +2442,16 @@ OUTPUT FORMAT (JSON, no other text):
             )
         members_block = "\n".join(summaries)
 
-        # Docs block
+        # Docs block. Keep the exact truncated strings shown to the LLM so
+        # quote verification checks against what the model could actually
+        # have quoted — verifying against the full untruncated doc_texts
+        # would "confirm" a fabricated quote that happens to match text past
+        # the 1200-char cutoff the LLM never saw.
         docs_text = ""
+        displayed_docs: list[str] = []
         for i, doc in enumerate(doc_texts, 1):
             truncated = doc[:1200] + "..." if len(doc) > 1200 else doc
+            displayed_docs.append(truncated)
             docs_text += f"\nDocument {i}: {truncated}\n"
 
         hint = labeler.domain_hint or ""
@@ -2494,13 +2500,14 @@ Respond ONLY with this exact JSON, no other text:
         raw = labeler.call_raw(system_prompt, user_prompt, max_tokens=1200)
         narrative = self._parse_narrative_response(raw)
 
-        unverified_quotes = verify_quotes(narrative, doc_texts)
+        unverified_quotes = verify_quotes(narrative, displayed_docs)
         if unverified_quotes:
             warnings.warn(
                 f"Meta-theme '{proposal['title']}' (theme_id={theme_id}) contains "
                 f"{len(unverified_quotes)} quoted phrase(s) not found verbatim in the "
                 f"source documents shown to the LLM: {unverified_quotes}. Review before "
-                f"publishing — the LLM may have paraphrased or fabricated the quote."
+                f"publishing — the LLM may have paraphrased or fabricated the quote.",
+                stacklevel=2,
             )
 
         return ReportTheme(

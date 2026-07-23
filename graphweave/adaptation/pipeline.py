@@ -84,13 +84,25 @@ def adapt_and_refit(
     probabilities = getattr(model, "probabilities_", None)
 
     is_local = model.config.embedding_provider == "local"
-    base_encoder = EmbeddingEngine(
-        model_name=model.config.embedding_model,
-        batch_size=model.config.embedding_batch_size,
-        provider=model.config.embedding_provider,
-        api_key=model.config.embedding_api_key,
-        verbose=False,
-    )
+    # Reuse the model's own engine so the baseline/adapted embeddings are
+    # produced in the exact same space the model was fit in. Rebuilding it
+    # from a subset of config fields (as before) silently dropped
+    # api_batch_size/output_dim/task_type/batch_delay/prefix, which for API
+    # providers can change the output dimensionality or embedding space.
+    base_encoder = getattr(model, "_embedding_engine", None)
+    if base_encoder is None:
+        base_encoder = EmbeddingEngine(
+            model_name=model.config.embedding_model,
+            batch_size=model.config.embedding_batch_size,
+            provider=model.config.embedding_provider,
+            api_key=model.config.embedding_api_key,
+            api_batch_size=model.config.embedding_api_batch_size,
+            output_dim=model.config.embedding_output_dim,
+            task_type=model.config.embedding_task_type,
+            batch_delay=model.config.embedding_batch_delay,
+            prefix=model.config.embedding_prefix,
+            verbose=False,
+        )
 
     adapter = EmbeddingAdapter(
         labeler=labeler,
@@ -121,6 +133,7 @@ def adapt_and_refit(
             "embeddings may not be better for this corpus — check n_triplets, "
             "epochs, and LLM judgment quality before trusting them.",
             UserWarning,
+            stacklevel=2,
         )
 
     if model.config.use_metadata_view:
@@ -130,6 +143,7 @@ def adapt_and_refit(
             "refit model is fit WITHOUT the metadata view. Pass the same metadata "
             "to the refit call yourself if you need it preserved.",
             UserWarning,
+            stacklevel=2,
         )
 
     new_model = GraphWeave(n_topics=model.n_topics, config=copy.deepcopy(model.config))
@@ -153,7 +167,7 @@ def adapt_and_refit(
         try:
             report["forgetting"] = forgetting_check(base_encoder.encode, adapter.encode)
         except Exception as e:  # best-effort regression guard; never fail the pipeline on it
-            warnings.warn(f"forgetting_check failed: {e}", UserWarning)
+            warnings.warn(f"forgetting_check failed: {e}", UserWarning, stacklevel=2)
 
     if evaluate:
         report["comparison"] = compare_embedders(

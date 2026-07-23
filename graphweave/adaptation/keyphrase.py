@@ -149,7 +149,12 @@ def keyphrase_expand_embeddings(
             doc + ("\nKeyphrases: " + ", ".join(kws) if kws else "")
             for doc, kws in zip(documents, keyphrases)
         ]
-        return encoder.encode(texts)
+        concat = np.asarray(encoder.encode(texts), dtype=np.float64)
+        if not normalize:
+            return concat
+        norms = np.linalg.norm(concat, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        return concat / norms
 
     if mode != "average":
         raise ValueError(f"Unknown mode: {mode!r}")

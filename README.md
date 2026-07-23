@@ -138,7 +138,7 @@ pip install graphweave
 # With LLM labeling support (Claude / GPT-4 / Gemini)
 pip install graphweave[llm]
 
-# With LLM-guided embedding fine-tuning (adds datasets, accelerate)
+# With LLM-guided embedding fine-tuning (adds torch, datasets, accelerate)
 pip install graphweave[adaptation]
 
 # Full installation (all optional features, including GPU support)
@@ -1207,7 +1207,7 @@ print(model.adaptation_diagnostics_["holdout_triplet_acc_after"])
 | Mode | Requires | Works with |
 |---|---|---|
 | `"linear"` | numpy only | any embedder, including API-based ones (Gemini) — the practical default on CPU-only machines |
-| `"finetune"` | `pip install "graphweave[adaptation]"` (adds `datasets`, `accelerate`) | local sentence-transformers models only |
+| `"finetune"` | `pip install "graphweave[adaptation]"` (adds `torch`, `datasets`, `accelerate`) | local sentence-transformers models only |
 | `"auto"` (default) | — | picks `"finetune"` when possible, else `"linear"` with a warning |
 
 `"linear"` trains an identity-initialized d×d matrix on top of frozen embeddings with a cosine hinge triplet loss, shrunk toward the identity by an L2 penalty so noisy LLM judgments can't push it far from the base geometry — cheap, CPU-friendly, and the only option for embedders you can't fine-tune. `"finetune"` runs a real 1-epoch, low-LR sentence-transformers fine-tune (`MultipleNegativesRankingLoss` by default) — the full ClusterLLM recipe.

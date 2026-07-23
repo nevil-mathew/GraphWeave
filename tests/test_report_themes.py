@@ -76,6 +76,34 @@ class TestGenerateReportThemesQuoteVerification:
             "a uniquely bewildering bureaucratic nightmare no one warned them about"
         ]
 
+    def test_fabricated_quote_past_truncation_is_flagged(self, small_model):
+        """A quote appearing only *after* the 1200-char truncation boundary
+        must still be flagged. The LLM is shown doc[:1200]; verifying against
+        the full untruncated documents would wrongly 'confirm' a fabricated
+        quote that happens to match text the LLM never saw. Regression guard
+        for the _write_meta_theme_narrative / verify_quotes mismatch."""
+        buried = "the coffee machine on the third floor was permanently broken"
+        filler = "routine intake notes and standard paperwork details. " * 30
+        long_doc = f"{filler} {buried} and closing remarks follow here."
+        assert long_doc.index(buried) > 1200  # phrase sits past what the LLM sees
+        # Every representative doc is now this long document, so the buried
+        # phrase is present in the full text but absent from the shown prefix.
+        small_model.documents_ = [long_doc] * len(small_model.documents_)
+
+        proposer_resp = _one_theme_proposal(small_model)
+        narrative_resp = json.dumps({
+            "narrative": (
+                "Respondents kept returning to small daily frustrations. One participant "
+                f"noted that '{buried}', a detail that captured a broader sense of neglect. "
+                "This pattern recurred across accounts and points to a deeper erosion of trust."
+            )
+        })
+        labeler = FakeThemeLabeler(proposer_resp, narrative_resp)
+
+        themes = small_model.generate_report_themes(labeler)
+
+        assert themes[0].unverified_quotes == [buried]
+
     def test_no_quote_means_no_flag(self, small_model):
         proposer_resp = _one_theme_proposal(small_model)
         narrative_resp = json.dumps({

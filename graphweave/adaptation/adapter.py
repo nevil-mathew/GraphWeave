@@ -231,6 +231,7 @@ class EmbeddingAdapter:
                 f"Falling back to linear adapter mode ({dep_error}). For real fine-tuning "
                 'install with: pip install "graphweave[adaptation]"',
                 UserWarning,
+                stacklevel=2,
             )
             return "linear"
         return "finetune"
@@ -268,18 +269,18 @@ class EmbeddingAdapter:
     def _finetune_sentence_transformer(self, documents: list[str], bank: TripletBank) -> None:
         try:
             import datasets
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 'Fine-tuning requires the "datasets" package. '
                 'Install with: pip install "graphweave[adaptation]"'
-            )
+            ) from e
         try:
             import accelerate  # noqa: F401
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 'Fine-tuning requires the "accelerate" package. '
                 'Install with: pip install "graphweave[adaptation]"'
-            )
+            ) from e
 
         from sentence_transformers import SentenceTransformer
 
@@ -312,6 +313,7 @@ class EmbeddingAdapter:
                     "freeze_layers was set but no matching parameter names were "
                     "found — no layers were frozen.",
                     UserWarning,
+                    stacklevel=2,
                 )
 
         train_texts = bank.to_training_texts(documents)

@@ -31,6 +31,20 @@ class _FakeCompletions:
         return _FakeResponse('{"answers": ["B"]}')
 
 
+class _RejectsReasoningFieldCompletions:
+    """Mimics a mandatory-reasoning model that errors on the disable field
+    instead of silently ignoring it, and succeeds once it's dropped."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if "extra_body" in kwargs:
+            raise RuntimeError("400 Bad Request: reasoning cannot be disabled")
+        return _FakeResponse('{"answers": ["B"]}')
+
+
 class _FakeChat:
     def __init__(self):
         self.completions = _FakeCompletions()
@@ -72,3 +86,13 @@ class TestReasoningDisable:
         assert fake_client.chat.completions.calls[0]["extra_body"] == {
             "reasoning": {"enabled": False}
         }
+
+    def test_openrouter_retries_without_reasoning_field_if_model_rejects_it(self):
+        labeler, fake_client = _labeler_with_fake_client("openrouter")
+        fake_client.chat.completions = _RejectsReasoningFieldCompletions()
+        result = labeler.call_raw("system", "user")
+        assert result == '{"answers": ["B"]}'
+        calls = fake_client.chat.completions.calls
+        assert len(calls) == 2
+        assert "extra_body" in calls[0]
+        assert "extra_body" not in calls[1]

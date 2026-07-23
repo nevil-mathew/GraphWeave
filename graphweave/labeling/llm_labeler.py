@@ -547,9 +547,17 @@ Respond ONLY with this exact JSON format, no other text:
             # surfacing as an empty completion with finish_reason="length" (the same
             # problem _call_google avoids below via thinking_config). OpenRouter's unified
             # "reasoning" field disables that for models that support toggling it; models
-            # that don't support disabling it just ignore the field.
+            # that don't support disabling it just ignore the field. A minority of
+            # mandatory-reasoning models reject the field outright instead of ignoring
+            # it, so retry once without it if the call errors.
             kwargs["extra_body"] = {"reasoning": {"enabled": False}}
-        response = self._client.chat.completions.create(**kwargs)
+            try:
+                response = self._client.chat.completions.create(**kwargs)
+            except Exception:
+                del kwargs["extra_body"]
+                response = self._client.chat.completions.create(**kwargs)
+        else:
+            response = self._client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
         if content is None:
             finish_reason = response.choices[0].finish_reason
