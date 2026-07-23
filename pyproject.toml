@@ -151,9 +151,9 @@ benchmark = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/nevil-mathew/topic-extraction-poc"
-Repository = "https://github.com/nevil-mathew/topic-extraction-poc"
-Issues = "https://github.com/nevil-mathew/topic-extraction-poc/issues"
+Homepage = "https://github.com/nevil-mathew/GraphWeave"
+Repository = "https://github.com/nevil-mathew/GraphWeave"
+Issues = "https://github.com/nevil-mathew/GraphWeave/issues"
 
 
 [tool.setuptools.packages.find]

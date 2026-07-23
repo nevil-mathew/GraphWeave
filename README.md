@@ -6,7 +6,7 @@
 
 **Multi-view graph topic modeling with consensus clustering and iterative refinement**
 
-[![CI](https://github.com/nevil-mathew/topic-extraction-poc/actions/workflows/ci.yml/badge.svg)](https://github.com/nevil-mathew/topic-extraction-poc/actions/workflows/ci.yml)
+[![CI](https://github.com/nevil-mathew/GraphWeave/actions/workflows/ci.yml/badge.svg)](https://github.com/nevil-mathew/GraphWeave/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/graphweave.svg)](https://pypi.org/project/graphweave/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
@@ -148,8 +148,8 @@ pip install graphweave[full]
 ### From source
 
 ```bash
-git clone https://github.com/nevil-mathew/topic-extraction-poc.git
-cd topic-extraction-poc
+git clone https://github.com/nevil-mathew/GraphWeave.git
+cd GraphWeave
 pip install -e ".[dev]"
 ```
 
@@ -1934,7 +1934,7 @@ If you use GraphWeave in academic work, please cite the software and the methods
   author    = {Mathew, Nevil},
   title     = {GraphWeave: Multi-View Graph Topic Modeling with Iterative Refinement},
   year      = {2026},
-  url       = {https://github.com/nevil-mathew/topic-extraction-poc}
+  url       = {https://github.com/nevil-mathew/GraphWeave}
 }
 ```
 
@@ -2079,11 +2079,11 @@ inherited third-party notice from the original `tritopic` project.
 
 ## Contributing
 
-Contributions welcome! Please open an issue or pull request on [GitHub](https://github.com/nevil-mathew/topic-extraction-poc).
+Contributions welcome! Please open an issue or pull request on [GitHub](https://github.com/nevil-mathew/GraphWeave).
 
 ## Links
 
-- **Repository:** [GitHub](https://github.com/nevil-mathew/topic-extraction-poc)
+- **Repository:** [GitHub](https://github.com/nevil-mathew/GraphWeave)
 - **PyPI:** [graphweave](https://pypi.org/project/graphweave/)
-- **Issues:** [Bug reports & feature requests](https://github.com/nevil-mathew/topic-extraction-poc/issues)
+- **Issues:** [Bug reports & feature requests](https://github.com/nevil-mathew/GraphWeave/issues)
 - **Prior work:** [tritopic on PyPI](https://pypi.org/project/tritopic/) / [SmartVisions-AI/tritopic on GitHub](https://github.com/SmartVisions-AI/tritopic)
