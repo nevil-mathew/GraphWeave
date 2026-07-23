@@ -157,12 +157,14 @@ class EmbeddingAdapter:
         base_model_name: str = "all-MiniLM-L6-v2",
         is_local: bool = True,
         config: AdaptationConfig | None = None,
+        embedding_prefix: str | None = None,
     ):
         self.labeler = labeler
         self.base_encoder = base_encoder
         self.base_model_name = base_model_name
         self.is_local = is_local
         self.config = config or AdaptationConfig()
+        self.embedding_prefix = embedding_prefix
 
         self.mode_: str | None = None
         self.model_ = None
@@ -319,6 +321,11 @@ class EmbeddingAdapter:
         train_texts = bank.to_training_texts(documents)
         if not train_texts["anchor"]:
             raise ValueError("No training triplets available (bank.train is empty).")
+        if self.embedding_prefix:
+            train_texts = {
+                key: [self.embedding_prefix + text for text in texts]
+                for key, texts in train_texts.items()
+            }
         train_dataset = datasets.Dataset.from_dict(train_texts)
 
         loss = (
@@ -349,6 +356,8 @@ class EmbeddingAdapter:
         if self.mode_ is None:
             raise ValueError("EmbeddingAdapter not fitted — call finetune() first.")
         if self.mode_ == "finetune":
+            if self.embedding_prefix:
+                documents = [self.embedding_prefix + doc for doc in documents]
             return self.model_.encode(
                 documents, batch_size=32, normalize_embeddings=normalize, convert_to_numpy=True
             )

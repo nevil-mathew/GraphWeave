@@ -7,11 +7,11 @@ from graphweave.core.embeddings import EmbeddingEngine
 from graphweave.core.keywords import KeywordExtractor
 
 __all__ = [
-    "GraphWeave",
-    "GraphWeaveConfig",
-    "TopicInfo",
-    "GraphBuilder",
     "ConsensusLeiden",
     "EmbeddingEngine",
+    "GraphBuilder",
+    "GraphWeave",
+    "GraphWeaveConfig",
     "KeywordExtractor",
+    "TopicInfo",
 ]

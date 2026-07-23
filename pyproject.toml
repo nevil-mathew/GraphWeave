@@ -113,6 +113,7 @@ adaptation = [
     "datasets>=2.14.0",
     "accelerate>=0.26.0",
     "torch>=2.0.0",
+    "sentence-transformers>=3.0",
 ]
 # GPU acceleration extras
 # -------------------------

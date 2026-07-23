@@ -19,6 +19,8 @@ from .config import AdaptationConfig
 from .evaluation import compare_embedders, forgetting_check, triplet_accuracy
 
 if TYPE_CHECKING:
+    import pandas as pd
+
     from graphweave.core.model import GraphWeave
 
 
@@ -28,6 +30,7 @@ def adapt_and_refit(
     config: AdaptationConfig | None = None,
     evaluate: bool = True,
     labels_true=None,
+    metadata: "pd.DataFrame | None" = None,
 ) -> tuple["GraphWeave", dict]:
     """Adapt *model*'s embedder to LLM triplet judgments and refit a **new**
     GraphWeave model with the adapted embeddings.
@@ -53,6 +56,11 @@ def adapt_and_refit(
         never available for real unsupervised use). Passed straight through
         to the internal :func:`compare_embedders` call so ``report["comparison"]``
         gets ARI/NMI/cluster-accuracy columns; has no other effect.
+    metadata : pd.DataFrame, optional
+        The same fit-time metadata *model* was originally fit with. Required
+        when ``model.config.use_metadata_view`` is True — it is not persisted
+        on the model, so the refit can't reconstruct the metadata view
+        without it.
 
     Returns
     -------
@@ -110,6 +118,7 @@ def adapt_and_refit(
         base_model_name=model.config.embedding_model,
         is_local=is_local,
         config=config,
+        embedding_prefix=model.config.embedding_prefix,
     )
 
     bank = adapter.collect_triplets(
@@ -136,19 +145,21 @@ def adapt_and_refit(
             stacklevel=2,
         )
 
-    if model.config.use_metadata_view:
-        warnings.warn(
+    if model.config.use_metadata_view and metadata is None:
+        raise ValueError(
             "adapt_and_refit: the original model used use_metadata_view=True, but "
-            "the fit-time metadata DataFrame is not persisted on the model, so the "
-            "refit model is fit WITHOUT the metadata view. Pass the same metadata "
-            "to the refit call yourself if you need it preserved.",
-            UserWarning,
-            stacklevel=2,
+            "the fit-time metadata DataFrame is not persisted on the model, so it "
+            "can't be reconstructed automatically. Pass the same metadata used for "
+            "the original fit() call via the metadata= argument to preserve the "
+            "metadata view on refit."
         )
 
     new_model = GraphWeave(n_topics=model.n_topics, config=copy.deepcopy(model.config))
     new_model.fit(
-        documents, embeddings=new_embeddings, sample_weights=getattr(model, "sample_weights_", None)
+        documents,
+        embeddings=new_embeddings,
+        metadata=metadata,
+        sample_weights=getattr(model, "sample_weights_", None),
     )
 
     report: dict = {

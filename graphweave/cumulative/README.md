@@ -265,9 +265,12 @@ differently *after* fitting.
 
 ### Flow 1 — `global_refit` (the gold standard)
 
-**Idea:** every recluster re-fits on the *entire* accumulated corpus, so the result is
-**identical to running full-batch `GraphWeave.fit()` on all data so far**. This is the
-default and the quality ceiling. ([`GlobalRefitStrategy`](strategies.py#L71))
+**Idea:** every recluster re-fits on the accumulated corpus. In **Regime A** (corpus ≤
+`max_inmemory_docs`) this means the *entire* corpus, so the result is **identical to
+running full-batch `GraphWeave.fit()` on all data so far**; once the corpus exceeds
+`max_inmemory_docs` (**Regime B**), it refits on a bounded coreset instead, so the result
+is an approximation. This is the default and the quality ceiling in Regime A.
+([`GlobalRefitStrategy`](strategies.py#L71))
 
 ```mermaid
 flowchart TD
@@ -604,6 +607,8 @@ against it directly:
 import copy
 from graphweave import GraphWeave, GraphWeaveConfig
 from graphweave.cumulative.evaluation import compare_to_full_batch, benchmark_strategies
+
+base_cfg = GraphWeaveConfig(verbose=False)   # same config used to fit the compared models
 
 # One model vs the baseline (same docs, same order):
 full = GraphWeave(config=copy.deepcopy(base_cfg)); full.fit(all_docs, embeddings=all_emb)

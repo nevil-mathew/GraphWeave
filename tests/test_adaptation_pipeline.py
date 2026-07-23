@@ -7,6 +7,7 @@ import json
 import re
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from graphweave import GraphWeave, GraphWeaveConfig
@@ -136,17 +137,35 @@ class TestAdaptAndRefit:
         )
         assert new_model.n_topics == 3
 
-    def test_metadata_view_warns_when_not_carried_through(self):
+    def test_metadata_view_raises_when_metadata_not_passed(self):
         docs, _labels, embs = _make_corpus()
         cfg = GraphWeaveConfig(
             use_dim_reduction=False, use_iterative_refinement=False,
             n_consensus_runs=3, min_cluster_size=5, n_neighbors=10,
             random_state=42, verbose=False, use_metadata_view=True,
         )
-        model = GraphWeave(config=cfg).fit(docs, embeddings=embs)
+        metadata = pd.DataFrame({"category": [f"cat_{i % 3}" for i in range(len(docs))]})
+        model = GraphWeave(config=cfg).fit(docs, embeddings=embs, metadata=metadata)
 
-        with pytest.warns(UserWarning, match="metadata"):
+        with pytest.raises(ValueError, match="metadata"):
             adapt_and_refit(model, _TextOracleLabeler(), config=_ADAPT_CONFIG, evaluate=False)
+
+    def test_metadata_view_preserved_when_metadata_passed(self):
+        docs, _labels, embs = _make_corpus()
+        cfg = GraphWeaveConfig(
+            use_dim_reduction=False, use_iterative_refinement=False,
+            n_consensus_runs=3, min_cluster_size=5, n_neighbors=10,
+            random_state=42, verbose=False, use_metadata_view=True,
+        )
+        metadata = pd.DataFrame({"category": [f"cat_{i % 3}" for i in range(len(docs))]})
+        model = GraphWeave(config=cfg).fit(docs, embeddings=embs, metadata=metadata)
+
+        new_model, _report = adapt_and_refit(
+            model, _TextOracleLabeler(), config=_ADAPT_CONFIG, evaluate=False, metadata=metadata
+        )
+
+        assert new_model._is_fitted
+        assert new_model._metadata_graph is not None
 
 
 class TestAdaptEmbeddingsWithLlmDelegate:

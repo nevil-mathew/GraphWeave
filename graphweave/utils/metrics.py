@@ -42,48 +42,55 @@ def compute_coherence(
     """
     if len(keywords) < 2:
         return 0.0
-    
-    # Tokenize documents
+
+    # Tokenize documents, preserving order (needed for sliding windows)
     def tokenize(text):
         import re
-        return set(re.findall(r'\b\w+\b', text.lower()))
-    
-    doc_tokens = [tokenize(doc) for doc in documents]
-    n_docs = len(documents)
-    
-    # Count document frequencies
-    word_doc_freq = Counter()
-    for tokens in doc_tokens:
-        for word in tokens:
-            word_doc_freq[word] += 1
-    
-    # Count co-occurrences (document-level)
-    pair_doc_freq = Counter()
-    for tokens in doc_tokens:
+        return re.findall(r'\b\w+\b', text.lower())
+
+    def windows(tokens, size):
+        if not tokens:
+            return []
+        if len(tokens) <= size:
+            return [set(tokens)]
+        return [set(tokens[i:i + size]) for i in range(len(tokens) - size + 1)]
+
+    all_windows = [w for doc in documents for w in windows(tokenize(doc), window_size)]
+    n_windows = len(all_windows)
+
+    # Count window frequencies
+    word_window_freq = Counter()
+    for window in all_windows:
+        for word in window:
+            word_window_freq[word] += 1
+
+    # Count co-occurrences (within the same window)
+    pair_window_freq = Counter()
+    for window in all_windows:
         for w1, w2 in combinations(keywords, 2):
-            if w1.lower() in tokens and w2.lower() in tokens:
-                pair_doc_freq[(w1.lower(), w2.lower())] += 1
-    
+            if w1.lower() in window and w2.lower() in window:
+                pair_window_freq[(w1.lower(), w2.lower())] += 1
+
     # Compute coherence
     coherence_scores = []
-    
+
     for w1, w2 in combinations(keywords, 2):
         w1_lower, w2_lower = w1.lower(), w2.lower()
-        
-        freq_w1 = word_doc_freq.get(w1_lower, 0)
-        freq_w2 = word_doc_freq.get(w2_lower, 0)
-        freq_pair = pair_doc_freq.get((w1_lower, w2_lower), 0)
-        
+
+        freq_w1 = word_window_freq.get(w1_lower, 0)
+        freq_w2 = word_window_freq.get(w2_lower, 0)
+        freq_pair = pair_window_freq.get((w1_lower, w2_lower), 0)
+
         if freq_w1 == 0 or freq_w2 == 0:
             continue
-        
+
         if method == "npmi":
             # Normalized Pointwise Mutual Information
             # Use consistent epsilon smoothing on all probabilities
             epsilon = 1e-12
-            p_w1 = (freq_w1 + 1) / (n_docs + 1)
-            p_w2 = (freq_w2 + 1) / (n_docs + 1)
-            p_pair = (freq_pair + 1) / (n_docs + 1)
+            p_w1 = (freq_w1 + 1) / (n_windows + 1)
+            p_w2 = (freq_w2 + 1) / (n_windows + 1)
+            p_pair = (freq_pair + 1) / (n_windows + 1)
 
             pmi = np.log(p_pair / (p_w1 * p_w2))
             npmi = pmi / (-np.log(p_pair) + epsilon)
@@ -92,19 +99,19 @@ def compute_coherence(
         elif method == "uci":
             # UCI coherence
             epsilon = 1e-12
-            p_pair = (freq_pair + 1) / (n_docs + 1)
-            p_w1 = (freq_w1 + 1) / (n_docs + 1)
-            p_w2 = (freq_w2 + 1) / (n_docs + 1)
+            p_pair = (freq_pair + 1) / (n_windows + 1)
+            p_w1 = (freq_w1 + 1) / (n_windows + 1)
+            p_w2 = (freq_w2 + 1) / (n_windows + 1)
 
             pmi = np.log(p_pair / (p_w1 * p_w2 + epsilon))
             coherence_scores.append(pmi)
-            
+
         elif method == "umass":
             # UMass coherence
             if freq_w2 > 0:
                 score = np.log((freq_pair + 1) / freq_w2)
                 coherence_scores.append(score)
-    
+
     return float(np.mean(coherence_scores)) if coherence_scores else 0.0
 
 
@@ -252,9 +259,10 @@ def compute_downstream_score(
     features = np.hstack([embeddings, topic_features])
     
     if task == "classification":
-        # Cross-validated F1
+        # Cross-validated F1 (cv bounded by the rarest class so small classes don't crash it)
         clf = LogisticRegression(max_iter=1000, random_state=42)
-        scores = cross_val_score(clf, features, y_true, cv=5, scoring="f1_macro")
+        cv = min(5, min(Counter(y_true).values()))
+        scores = cross_val_score(clf, features, y_true, cv=cv, scoring="f1_macro")
         return float(np.mean(scores))
     else:
         # Clustering ARI
