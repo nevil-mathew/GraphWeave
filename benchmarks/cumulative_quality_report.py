@@ -20,14 +20,14 @@ from pathlib import Path
 # Allow running directly (python benchmarks/cumulative_quality_report.py) without install.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.cumulative import CumulativeConfig, CumulativeTriTopic
-from tritopic.cumulative.datasets import make_streaming_corpus
-from tritopic.cumulative.evaluation import benchmark_strategies, compare_to_full_batch
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.cumulative import CumulativeConfig, CumulativeGraphWeave
+from graphweave.cumulative.datasets import make_streaming_corpus
+from graphweave.cumulative.evaluation import benchmark_strategies, compare_to_full_batch
 
 
-def _cfg() -> TriTopicConfig:
-    return TriTopicConfig(
+def _cfg() -> GraphWeaveConfig:
+    return GraphWeaveConfig(
         use_dim_reduction=False,
         use_lexical_view=True,
         use_iterative_refinement=False,
@@ -55,7 +55,7 @@ def scenario_stationary() -> None:
     print(f"Stream: {corp.n_docs} docs in 5 batches, 6 real topics, "
           f"{(corp.all_labels == -1).sum()} noise docs.\n")
 
-    cum = CumulativeTriTopic(
+    cum = CumulativeGraphWeave(
         CumulativeConfig(base_config=cfg, strategy="global_refit",
                          recluster_trigger="drift", novelty_threshold=0.25)
     )
@@ -64,7 +64,7 @@ def scenario_stationary() -> None:
         r = cum.add_batch(d, embeddings=e)
         n_reclusters += int(r.reclustered)
 
-    full = TriTopic(config=copy.deepcopy(cfg))
+    full = GraphWeave(config=copy.deepcopy(cfg))
     full.fit(corp.all_documents, embeddings=corp.all_embeddings)
     m = compare_to_full_batch(cum, full, labels_true=corp.all_labels)
 
@@ -93,7 +93,7 @@ def scenario_emerging() -> None:
     )
     print("Stream: 6th topic only starts appearing at batch 3.\n")
 
-    cum = CumulativeTriTopic(
+    cum = CumulativeGraphWeave(
         CumulativeConfig(base_config=cfg, strategy="global_refit",
                          recluster_trigger="drift", novelty_threshold=0.15)
     )

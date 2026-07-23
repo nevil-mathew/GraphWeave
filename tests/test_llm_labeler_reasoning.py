@@ -8,7 +8,7 @@ this — mirrored here against a fake OpenAI-SDK-shaped client so no real
 API call is made.
 """
 
-from tritopic.labeling.llm_labeler import LLMLabeler
+from graphweave.labeling.llm_labeler import LLMLabeler
 
 
 class _FakeChoice:

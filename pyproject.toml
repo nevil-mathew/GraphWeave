@@ -3,16 +3,16 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tritopic"
-version = "2.3.0"
-description = "TriTopic: Tri-Modal Graph Topic Modeling with Iterative Refinement — state-of-the-art topic modeling that outperforms BERTopic, LDA, and NMF across all standard benchmarks."
+name = "graphweave"
+version = "0.1.0"
+description = "GraphWeave: multi-view graph topic modeling (semantic + lexical + metadata) with consensus Leiden clustering and iterative refinement."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Roman Egger", email = "roman.egger@smartvisions.at"}
+    {name = "Nevil Mathew", email = "nevilmat7@gmail.com"}
 ]
 maintainers = [
-    {name = "Roman Egger", email = "roman.egger@smartvisions.at"}
+    {name = "Nevil Mathew", email = "nevilmat7@gmail.com"}
 ]
 keywords = [
     "topic-modeling",
@@ -105,7 +105,7 @@ full = [
     "datasets>=2.14.0",
     "accelerate>=0.26.0",
 ]
-# LLM-guided embedding adaptation (tritopic.adaptation): real
+# LLM-guided embedding adaptation (graphweave.adaptation): real
 # sentence-transformers fine-tuning needs the Trainer API's dependencies.
 # The pure-numpy LinearAdapter backend needs none of this — it's usable
 # with only the core install.
@@ -118,7 +118,7 @@ adaptation = [
 # -------------------------
 # gpu: FAISS for fast (optionally GPU-accelerated) kNN graph construction +
 #      torch for GPU cosine-similarity and embedding refinement.
-#      Install: pip install "tritopic[gpu]"  (also included in tritopic[full])
+#      Install: pip install "graphweave[gpu]"  (also included in graphweave[full])
 #      faiss-cpu is the pip default; on a CUDA machine swap it out with:
 #        pip install faiss-gpu-cu11   (CUDA 11.x)
 #        pip install faiss-gpu-cu12   (CUDA 12.x)
@@ -129,9 +129,9 @@ gpu = [
 # gpu-umap: RAPIDS cuML for GPU UMAP and GPU MiniBatchKMeans.
 #           cuML is distributed via conda, not pip — install it separately:
 #             conda install -c rapidsai -c conda-forge cuml=24.06 cuda-version=12.0
-#           Once cuml is in your environment, tritopic will use it automatically.
+#           Once cuml is in your environment, graphweave will use it automatically.
 #           This extra is intentionally empty (no pip-installable dep) so that
-#           `pip install "tritopic[gpu-umap]"` does not fail on non-CUDA machines.
+#           `pip install "graphweave[gpu-umap]"` does not fail on non-CUDA machines.
 gpu-umap = []
 dev = [
     "pytest>=7.0.0",
@@ -151,18 +151,17 @@ benchmark = [
 ]
 
 [project.urls]
-Homepage = "https://www.smartvisions.at"
-Documentation = "https://github.com/SmartVisions-AI/tritopic/blob/main/docs/docs.md"
-Repository = "https://github.com/SmartVisions-AI/tritopic"
-Issues = "https://github.com/SmartVisions-AI/tritopic/issues"
+Homepage = "https://github.com/nevil-mathew/topic-extraction-poc"
+Repository = "https://github.com/nevil-mathew/topic-extraction-poc"
+Issues = "https://github.com/nevil-mathew/topic-extraction-poc/issues"
 
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["tritopic*"]
+include = ["graphweave*"]
 
 [tool.setuptools.package-data]
-tritopic = ["py.typed"]
+graphweave = ["py.typed"]
 
 [tool.black]
 line-length = 100

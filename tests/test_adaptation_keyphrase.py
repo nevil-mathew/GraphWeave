@@ -1,10 +1,10 @@
-"""Tests for tritopic.adaptation.keyphrase."""
+"""Tests for graphweave.adaptation.keyphrase."""
 
 import json
 
 import numpy as np
 
-from tritopic.adaptation.keyphrase import generate_keyphrases, keyphrase_expand_embeddings
+from graphweave.adaptation.keyphrase import generate_keyphrases, keyphrase_expand_embeddings
 
 
 class _CannedKeyphraseLabeler:

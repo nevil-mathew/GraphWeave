@@ -16,11 +16,11 @@ import numpy as np
 import pytest
 from sklearn.datasets import fetch_20newsgroups
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.cumulative import CumulativeConfig, CumulativeTriTopic
-from tritopic.cumulative.datasets import lsa_embed
-from tritopic.cumulative.evaluation import compare_to_full_batch
-from tritopic.utils.metrics import compute_ari, compute_nmi
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.cumulative import CumulativeConfig, CumulativeGraphWeave
+from graphweave.cumulative.datasets import lsa_embed
+from graphweave.cumulative.evaluation import compare_to_full_batch
+from graphweave.utils.metrics import compute_ari, compute_nmi
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -39,8 +39,8 @@ def _ng20(n_docs: int, cats: list[int], seed: int = 42) -> tuple[list[str], np.n
     return docs, labels
 
 
-def _light_cfg() -> TriTopicConfig:
-    return TriTopicConfig(
+def _light_cfg() -> GraphWeaveConfig:
+    return GraphWeaveConfig(
         use_dim_reduction=False,
         use_lexical_view=True,
         use_iterative_refinement=False,
@@ -110,13 +110,13 @@ class TestRealDataPipeline:
 
     def test_labels_cover_all_docs(self, ng20_small):
         docs, embs, _ = ng20_small
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs, embeddings=embs)
         assert len(cum.labels_) == len(docs)
 
     def test_recovers_reasonable_structure(self, ng20_small):
         docs, embs, labels = ng20_small
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs, embeddings=embs)
         ari = compute_ari(cum.labels_, labels)
         # LSA on 10 real, heavily-overlapping newsgroups categories is hard;
@@ -126,7 +126,7 @@ class TestRealDataPipeline:
     def test_second_batch_accumulates(self, ng20_small):
         docs, embs, _ = ng20_small
         half = len(docs) // 2
-        cum = CumulativeTriTopic(
+        cum = CumulativeGraphWeave(
             CumulativeConfig(base_config=_light_cfg(), recluster_trigger="manual")
         )
         cum.add_batch(docs[:half], embeddings=embs[:half])
@@ -135,10 +135,10 @@ class TestRealDataPipeline:
 
     def test_close_to_full_batch(self, ng20_small):
         docs, embs, labels = ng20_small
-        full = TriTopic(config=copy.deepcopy(_light_cfg()))
+        full = GraphWeave(config=copy.deepcopy(_light_cfg()))
         full.fit(docs, embeddings=embs)
 
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs, embeddings=embs)
 
         m = compare_to_full_batch(cum, full, labels_true=labels)
@@ -153,7 +153,7 @@ class TestRealDriftDetection:
 
     def test_drift_fires_on_new_categories(self, ng20_drift):
         batches_docs, batches_embs, batches_lbl = ng20_drift
-        cum = CumulativeTriTopic(CumulativeConfig(
+        cum = CumulativeGraphWeave(CumulativeConfig(
             base_config=_light_cfg(),
             recluster_trigger="drift",
             novelty_threshold=0.15,
@@ -175,7 +175,7 @@ class TestRealDriftDetection:
 
     def test_novelty_stays_low_on_familiar(self, ng20_drift):
         batches_docs, batches_embs, _ = ng20_drift
-        cum = CumulativeTriTopic(CumulativeConfig(
+        cum = CumulativeGraphWeave(CumulativeConfig(
             base_config=_light_cfg(),
             recluster_trigger="drift",
             novelty_threshold=0.15,
@@ -193,7 +193,7 @@ class TestRealBiggerPicture:
 
     def test_hierarchy_has_requested_levels(self, ng20_small):
         docs, embs, _ = ng20_small
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs, embeddings=embs)
         view = cum.bigger_picture(n_levels=2)
         h = view["hierarchy"]
@@ -201,7 +201,7 @@ class TestRealBiggerPicture:
 
     def test_coarse_level_has_fewer_nodes(self, ng20_small):
         docs, embs, _ = ng20_small
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs, embeddings=embs)
         view = cum.bigger_picture(n_levels=2)
         h = view["hierarchy"]
@@ -209,7 +209,7 @@ class TestRealBiggerPicture:
 
     def test_themes_none_without_labeler(self, ng20_small):
         docs, embs, _ = ng20_small
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs, embeddings=embs)
         assert cum.bigger_picture()["themes"] is None
 
@@ -221,7 +221,7 @@ class TestRealEvaluate:
 
     def test_metrics_are_finite(self, ng20_small):
         docs, embs, _ = ng20_small
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs, embeddings=embs)
         m = cum.evaluate()
         for key in ("coherence_mean", "diversity", "n_total_docs", "n_global_topics"):
@@ -230,7 +230,7 @@ class TestRealEvaluate:
 
     def test_diversity_in_range(self, ng20_small):
         docs, embs, _ = ng20_small
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs, embeddings=embs)
         m = cum.evaluate()
         assert 0.0 <= m["diversity"] <= 1.0
@@ -244,7 +244,7 @@ class TestRealTransform:
     def test_transform_returns_valid_ids(self, ng20_small):
         docs, embs, _ = ng20_small
         half = len(docs) // 2
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs[:half], embeddings=embs[:half])
         assigned = cum.transform(docs[half:], embeddings=embs[half:])
         valid_ids = set(cum.labels_[cum.labels_ != -1]) | {-1}
@@ -253,7 +253,7 @@ class TestRealTransform:
     def test_transform_shape(self, ng20_small):
         docs, embs, _ = ng20_small
         half = len(docs) // 2
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=_light_cfg()))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=_light_cfg()))
         cum.add_batch(docs[:half], embeddings=embs[:half])
         assigned = cum.transform(docs[half:], embeddings=embs[half:])
         assert len(assigned) == len(docs) - half
@@ -278,8 +278,8 @@ class TestHnswPath:
 
     def test_pipeline_handles_6k_docs(self, ng20_6k):
         docs, embs, labels = ng20_6k
-        cum = CumulativeTriTopic(CumulativeConfig(
-            base_config=TriTopicConfig(
+        cum = CumulativeGraphWeave(CumulativeConfig(
+            base_config=GraphWeaveConfig(
                 use_dim_reduction=False,
                 use_lexical_view=True,
                 use_iterative_refinement=False,
@@ -299,8 +299,8 @@ class TestHnswPath:
     def test_low_memory_path_used(self, ng20_6k):
         """Verify low_memory=True doesn't OOM and produces a valid model."""
         docs, embs, _ = ng20_6k
-        cum = CumulativeTriTopic(CumulativeConfig(
-            base_config=TriTopicConfig(
+        cum = CumulativeGraphWeave(CumulativeConfig(
+            base_config=GraphWeaveConfig(
                 use_dim_reduction=False, use_lexical_view=False,
                 use_iterative_refinement=False,
                 n_consensus_runs=3, min_cluster_size=10,

@@ -1,13 +1,13 @@
-"""Tests for tritopic.adaptation.adapter.LinearAdapter — pure numpy, no
+"""Tests for graphweave.adaptation.adapter.LinearAdapter — pure numpy, no
 network, no fine-tuning dependencies required."""
 
 import numpy as np
 import pytest
 
-from tritopic.adaptation.adapter import EmbeddingAdapter, LinearAdapter
-from tritopic.adaptation.config import AdaptationConfig
-from tritopic.adaptation.evaluation import triplet_accuracy
-from tritopic.adaptation.triplets import TripletJudgment
+from graphweave.adaptation.adapter import EmbeddingAdapter, LinearAdapter
+from graphweave.adaptation.config import AdaptationConfig
+from graphweave.adaptation.evaluation import triplet_accuracy
+from graphweave.adaptation.triplets import TripletJudgment
 
 
 def _make_clusters(seed=0, n_per_cluster=30, dim=16, noise=0.5):

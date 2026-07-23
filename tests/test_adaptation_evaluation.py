@@ -1,16 +1,16 @@
-"""Tests for tritopic.adaptation.evaluation."""
+"""Tests for graphweave.adaptation.evaluation."""
 
 import math
 
 import numpy as np
 
-from tritopic.adaptation.evaluation import (
+from graphweave.adaptation.evaluation import (
     compare_embedders,
     forgetting_check,
     hungarian_accuracy,
     triplet_accuracy,
 )
-from tritopic.adaptation.triplets import TripletJudgment
+from graphweave.adaptation.triplets import TripletJudgment
 
 
 def test_triplet_accuracy_hand_built_geometry():
@@ -53,8 +53,8 @@ def test_forgetting_check_identity_encoder_zero_delta():
 
 
 def test_compare_embedders_prefers_clean_over_noisy():
-    from tritopic.core.model import TriTopicConfig
-    from tritopic.cumulative.datasets import make_streaming_corpus
+    from graphweave.core.model import GraphWeaveConfig
+    from graphweave.cumulative.datasets import make_streaming_corpus
 
     corpus = make_streaming_corpus(n_topics=3, docs_per_batch=40, n_batches=1, random_state=0)
     docs = corpus.all_documents
@@ -63,7 +63,7 @@ def test_compare_embedders_prefers_clean_over_noisy():
     noisy = clean + rng.normal(scale=2.0, size=clean.shape)
     noisy = noisy / np.linalg.norm(noisy, axis=1, keepdims=True)
 
-    base_config = TriTopicConfig(
+    base_config = GraphWeaveConfig(
         use_dim_reduction=False, use_iterative_refinement=False,
         n_consensus_runs=3, min_cluster_size=5, n_neighbors=10, verbose=False,
     )

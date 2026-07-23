@@ -1,4 +1,4 @@
-"""Tests for tritopic.utils.quote_verification.
+"""Tests for graphweave.utils.quote_verification.
 
 generate_report_themes() asks an LLM to quote short phrases from source
 documents when writing report narratives. These tests check the utility
@@ -7,7 +7,7 @@ documents it was shown — the real risk being a fabricated participant quote
 slipping into a report unnoticed.
 """
 
-from tritopic.utils.quote_verification import extract_quoted_phrases, verify_quotes
+from graphweave.utils.quote_verification import extract_quoted_phrases, verify_quotes
 
 
 class TestExtractQuotedPhrases:

@@ -1,8 +1,8 @@
-"""Tests for LLM-guided granularity calibration (tritopic.labeling.llm_granularity).
+"""Tests for LLM-guided granularity calibration (graphweave.labeling.llm_granularity).
 
 No real API is ever called: a fake labeler exposing call_raw/call_structured
 stands in for LLMLabeler. Unit tests exercise the module's helper functions
-directly; the integration test drives a freshly-fit TriTopic model (NOT the
+directly; the integration test drives a freshly-fit GraphWeave model (NOT the
 shared session-scoped ``fitted_model`` fixture, since tune_resolution_with_llm
 mutates model state in place).
 """
@@ -12,9 +12,9 @@ import json
 import numpy as np
 import pytest
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.core.clustering import ConsensusLeiden
-from tritopic.labeling.llm_granularity import (
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.core.clustering import ConsensusLeiden
+from graphweave.labeling.llm_granularity import (
     _sample_triplets,
     _sample_triplets_fast,
     _sample_triplets_informed,
@@ -662,12 +662,12 @@ class TestNoSignalFallback:
 
 
 # --------------------------------------------------------------------------- #
-# Integration: TriTopic.tune_resolution_with_llm
+# Integration: GraphWeave.tune_resolution_with_llm
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def fresh_fitted_model(fake_documents, _fake_embeddings):
-    """A freshly-fit, non-shared TriTopic model (safe to mutate)."""
-    cfg = TriTopicConfig(
+    """A freshly-fit, non-shared GraphWeave model (safe to mutate)."""
+    cfg = GraphWeaveConfig(
         use_dim_reduction=False,
         use_iterative_refinement=False,
         use_lexical_view=True,
@@ -677,21 +677,21 @@ def fresh_fitted_model(fake_documents, _fake_embeddings):
         random_state=42,
         verbose=False,
     )
-    model = TriTopic(config=cfg)
+    model = GraphWeave(config=cfg)
     model.fit(fake_documents, embeddings=_fake_embeddings)
     return model
 
 
 class TestTuneResolutionWithLLM:
     def test_raises_if_not_fitted(self):
-        model = TriTopic()
+        model = GraphWeave()
         with pytest.raises(ValueError, match="Model not fitted"):
             model.tune_resolution_with_llm(FakeLabeler('{"answers": ["B"]}'))
 
     def test_raises_clear_error_on_missing_graph_after_save_load(self, fresh_fitted_model, tmp_path):
         path = str(tmp_path / "model.pkl")
         fresh_fitted_model.save(path)
-        reloaded = TriTopic.load(path)
+        reloaded = GraphWeave.load(path)
         assert reloaded.graph_ is None  # save()/load() never persists graph_
         with pytest.raises(ValueError, match="save\\(\\)/load\\(\\)"):
             reloaded.tune_resolution_with_llm(AllBLabeler())
@@ -733,7 +733,7 @@ class TestTuneResolutionWithLLM:
         the call (candidate scoring AND the final consensus re-fit) rather
         than being silently dropped somewhere in between."""
         import leidenalg as la
-        import tritopic.labeling.llm_granularity as llm_granularity_module
+        import graphweave.labeling.llm_granularity as llm_granularity_module
 
         weights = np.random.default_rng(0).uniform(1, 5, size=len(fresh_fitted_model.documents_))
         fresh_fitted_model.sample_weights_ = weights

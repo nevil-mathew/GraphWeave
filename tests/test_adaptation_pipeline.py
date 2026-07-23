@@ -1,5 +1,5 @@
-"""Tests for tritopic.adaptation.pipeline.adapt_and_refit and
-TriTopic.adapt_embeddings_with_llm — the end-to-end plumbing, forced into
+"""Tests for graphweave.adaptation.pipeline.adapt_and_refit and
+GraphWeave.adapt_embeddings_with_llm — the end-to-end plumbing, forced into
 linear-adapter mode so no fine-tuning dependencies are required.
 """
 
@@ -9,9 +9,9 @@ import re
 import numpy as np
 import pytest
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.adaptation.config import AdaptationConfig
-from tritopic.adaptation.pipeline import adapt_and_refit
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.adaptation.config import AdaptationConfig
+from graphweave.adaptation.pipeline import adapt_and_refit
 
 
 class _TextOracleLabeler:
@@ -55,7 +55,7 @@ def _make_corpus(n_per_topic=35, dim=16, noise=0.5, seed=0):
 
 
 def _fit_model(docs, embs):
-    cfg = TriTopicConfig(
+    cfg = GraphWeaveConfig(
         use_dim_reduction=False,
         use_iterative_refinement=False,
         n_consensus_runs=3,
@@ -64,7 +64,7 @@ def _fit_model(docs, embs):
         random_state=42,
         verbose=False,
     )
-    return TriTopic(config=cfg).fit(docs, embeddings=embs)
+    return GraphWeave(config=cfg).fit(docs, embeddings=embs)
 
 
 _ADAPT_CONFIG = AdaptationConfig(
@@ -117,18 +117,18 @@ class TestAdaptAndRefit:
         assert (tmp_path / "saved_adapter" / "linear.npz").exists()
 
     def test_raises_on_unfitted_model(self):
-        model = TriTopic()
+        model = GraphWeave()
         with pytest.raises(ValueError):
             adapt_and_refit(model, _TextOracleLabeler())
 
     def test_explicit_n_topics_carried_through_refit(self):
         docs, _labels, embs = _make_corpus()
-        cfg = TriTopicConfig(
+        cfg = GraphWeaveConfig(
             use_dim_reduction=False, use_iterative_refinement=False,
             n_consensus_runs=3, min_cluster_size=5, n_neighbors=10,
             random_state=42, verbose=False,
         )
-        model = TriTopic(n_topics=3, config=cfg).fit(docs, embeddings=embs)
+        model = GraphWeave(n_topics=3, config=cfg).fit(docs, embeddings=embs)
         assert model.n_topics == 3
 
         new_model, _report = adapt_and_refit(
@@ -138,12 +138,12 @@ class TestAdaptAndRefit:
 
     def test_metadata_view_warns_when_not_carried_through(self):
         docs, _labels, embs = _make_corpus()
-        cfg = TriTopicConfig(
+        cfg = GraphWeaveConfig(
             use_dim_reduction=False, use_iterative_refinement=False,
             n_consensus_runs=3, min_cluster_size=5, n_neighbors=10,
             random_state=42, verbose=False, use_metadata_view=True,
         )
-        model = TriTopic(config=cfg).fit(docs, embeddings=embs)
+        model = GraphWeave(config=cfg).fit(docs, embeddings=embs)
 
         with pytest.warns(UserWarning, match="metadata"):
             adapt_and_refit(model, _TextOracleLabeler(), config=_ADAPT_CONFIG, evaluate=False)
@@ -162,6 +162,6 @@ class TestAdaptEmbeddingsWithLlmDelegate:
         assert model._is_fitted
 
     def test_raises_before_fit(self):
-        model = TriTopic()
+        model = GraphWeave()
         with pytest.raises(ValueError):
             model.adapt_embeddings_with_llm(_TextOracleLabeler())

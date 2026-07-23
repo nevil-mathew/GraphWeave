@@ -1,63 +1,101 @@
-# TriTopic 2.3.0
+<p align="center">
+  <img src="assets/logo.png" alt="GraphWeave logo" width="180">
+</p>
 
-**Tri-Modal Graph Topic Modeling with Iterative Refinement**
+# GraphWeave
 
-A state-of-the-art topic modeling library that fuses semantic embeddings, lexical similarity, and metadata context through multi-view graph construction, consensus Leiden clustering, and iterative refinement. TriTopic produces stable, interpretable topics and **outperforms BERTopic, LDA, and NMF on all standard benchmarks**.
+**Multi-view graph topic modeling with consensus clustering and iterative refinement**
 
-[![PyPI version](https://badge.fury.io/py/tritopic.svg)](https://badge.fury.io/py/tritopic)
 [![CI](https://github.com/nevil-mathew/topic-extraction-poc/actions/workflows/ci.yml/badge.svg)](https://github.com/nevil-mathew/topic-extraction-poc/actions/workflows/ci.yml)
+[![PyPI version](https://badge.fury.io/py/graphweave.svg)](https://pypi.org/project/graphweave/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![Downloads](https://static.pepy.tech/badge/tritopic)](https://pepy.tech/project/tritopic)
 
-> **Mean NMI 0.575** (vs. BERTopic 0.513, NMF 0.416, LDA 0.299) | **100% corpus coverage** (0% outliers) | **Best NMI on all 4 benchmark datasets**
+GraphWeave fuses semantic embeddings, lexical similarity, and optional metadata into a single
+multi-view graph, then clusters it with consensus Leiden and sharpens the result with an
+iterative refinement loop. On the four benchmark datasets in [`run_benchmark.py`](run_benchmark.py)
+it reaches a mean NMI of **0.575** against BERTopic's 0.513, NMF's 0.416, and LDA's 0.299, with
+**100% corpus coverage** (zero outliers by default). See [Benchmarks](#benchmarks) for the full
+breakdown and how to reproduce it.
 
----
-
-## Table of Contents
-
-- [Why TriTopic?](#why-tritopic)
-- [Key Features](#key-features)
-- [Cumulative / Batch-wise Clustering](tritopic/cumulative/README.md)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [The Pipeline](#the-pipeline)
-- [Configuration Reference](#configuration-reference)
-- [Choosing min_cluster_size](#choosing-min_cluster_size)
-- [Memory Optimization for Large Datasets](#memory-optimization-for-large-datasets)
-- [Adaptive kNN Backend](#adaptive-knn-backend)
-- [Troubleshooting](#troubleshooting)
-- [Dimensionality Reduction](#dimensionality-reduction)
-- [Soft Topic Assignments](#soft-topic-assignments)
-- [Outlier Reduction](#outlier-reduction)
-- [Topic Merging](#topic-merging)
-- [Keyword Extraction](#keyword-extraction)
-- [LLM-Powered Labels](#llm-powered-labels)
-- [LLM-Guided Granularity Calibration](#llm-guided-granularity-calibration)
-- [LLM-Guided Embedding Adaptation](#llm-guided-embedding-adaptation)
-- [Visualizations](#visualizations)
-- [Evaluation](#evaluation)
-- [Advanced Usage](#advanced-usage)
-- [API Reference](#api-reference)
-- [Architecture](#architecture)
-- [Comparison with BERTopic](#comparison-with-bertopic)
-- [Benchmarks](#benchmarks)
-- [Citation](#citation)
-- [License](#license)
+> GraphWeave began as a fork-in-spirit of [`tritopic`](https://pypi.org/project/tritopic/), an
+> MIT-licensed library by Roman Egger, and has since been substantially rewritten and extended.
+> See [Acknowledgments](#acknowledgments) and [NOTICE.md](NOTICE.md) for the full story and license text.
 
 ---
 
-## Why TriTopic?
+## Contents
 
-Most topic models rely on a single signal -- either word co-occurrences (LDA, NMF) or embeddings alone (BERTopic). This limits their ability to separate topics that share vocabulary but differ semantically, or vice versa.
+**Getting started**
+[Why GraphWeave?](#why-graphweave) ·
+[Installation](#installation) ·
+[Quick Start](#quick-start) ·
+[The Pipeline](#the-pipeline)
 
-TriTopic solves this by **fusing three complementary views** of the document corpus into a single graph:
+**Core configuration**
+[Configuration Reference](#configuration-reference) ·
+[Choosing min_cluster_size](#choosing-min_cluster_size) ·
+[Memory Optimization](#memory-optimization-for-large-datasets) ·
+[Adaptive kNN Backend](#adaptive-knn-backend) ·
+[Troubleshooting](#troubleshooting)
 
-1. **Semantic view** -- sentence-transformer embeddings capture meaning
-2. **Lexical view** -- TF-IDF similarity captures surface-level word patterns
-3. **Metadata view** -- optional categorical/numerical features add domain context
+**Working with topics**
+[Dimensionality Reduction](#dimensionality-reduction) ·
+[Soft Topic Assignments](#soft-topic-assignments) ·
+[Outlier Reduction](#outlier-reduction) ·
+[Topic Merging](#topic-merging) ·
+[Keyword Extraction](#keyword-extraction)
 
-On top of this multi-view graph, TriTopic applies **consensus Leiden clustering** (multiple runs aggregated via co-occurrence matrices) and **iterative refinement** (embeddings are pulled toward cluster centroids and re-clustered). The result: topics that are more accurate, more coherent, more stable, and assign every document (zero outliers by default).
+**LLM-powered features**
+[LLM-Powered Labels](#llm-powered-labels) ·
+[LLM-Guided Granularity Calibration](#llm-guided-granularity-calibration) ·
+[LLM-Guided Embedding Adaptation](#llm-guided-embedding-adaptation) ·
+[Report Themes](#report-themes-qualitative-research-output)
+
+**Scaling up**
+[Cumulative / Batch-wise Clustering](graphweave/cumulative/README.md)
+
+**Going deeper**
+[Learning Guide](LEARNING_GUIDE/README.md) (pipeline internals, memory model, cheat sheet, visual guide) ·
+[Cheat Sheet](LEARNING_GUIDE/CHEAT_SHEET.md) ·
+[Visual Guide](LEARNING_GUIDE/VISUAL_GUIDE.md)
+
+**Visualizing & evaluating**
+[Visualizations](#visualizations) ·
+[Evaluation](#evaluation)
+
+**Reference**
+[Advanced Usage](#advanced-usage) ·
+[API Reference](#api-reference) ·
+[Architecture](#architecture) ·
+[Comparison with BERTopic](#comparison-with-bertopic) ·
+[Benchmarks](#benchmarks)
+
+**Project**
+[Citation](#citation) ·
+[Acknowledgments](#acknowledgments) ·
+[License](#license) ·
+[Contributing](#contributing) ·
+[Links](#links)
+
+---
+
+## Why GraphWeave?
+
+Most topic models rely on a single signal — either word co-occurrences (LDA, NMF) or embeddings
+alone (BERTopic). That limits their ability to separate topics that share vocabulary but differ
+semantically, or vice versa.
+
+GraphWeave fuses three complementary views of the corpus into one graph:
+
+1. **Semantic view** — sentence-transformer embeddings capture meaning
+2. **Lexical view** — TF-IDF similarity captures surface-level word patterns
+3. **Metadata view** — optional categorical/numerical features add domain context
+
+On top of that graph, GraphWeave runs **consensus Leiden clustering** (multiple runs aggregated
+via a co-occurrence graph) and **iterative refinement** (embeddings pulled toward cluster
+centroids and re-clustered). The result: topics that are more accurate, more coherent, more
+stable, and — by default — assign every document to a topic.
 
 ---
 
@@ -67,11 +105,11 @@ On top of this multi-view graph, TriTopic applies **consensus Leiden clustering*
 |---|---|
 | **Multi-view graph fusion** | Combines semantic embeddings, TF-IDF lexical similarity, and optional metadata into a single graph, avoiding the "embedding blur" that single-view models suffer from |
 | **Mutual kNN + SNN graphs** | Eliminates noise bridges between unrelated documents using bidirectional neighbor checks and shared-neighbor weighting |
-| **Consensus Leiden clustering** | Runs the Leiden algorithm multiple times and merges results via a co-occurrence matrix, producing dramatically more stable topics than single-run approaches |
+| **Consensus Leiden clustering** | Runs the Leiden algorithm multiple times and merges results via a co-occurrence graph, producing dramatically more stable topics than single-run approaches |
 | **Iterative refinement** | Alternates between clustering and embedding refinement, pulling documents toward their topic centroids to sharpen boundaries |
 | **Bidirectional resolution search** | Automatically finds the Leiden resolution parameter that produces the target number of topics |
 | **Dimensionality reduction** | Reduces high-dimensional embeddings (384-768d) to ~10d with UMAP or PaCMAP before graph construction, improving neighbor quality |
-| **100% corpus coverage** | Zero outliers by default -- every document is assigned to a topic, unlike HDBSCAN-based approaches |
+| **100% corpus coverage** | Zero outliers by default — every document is assigned to a topic, unlike HDBSCAN-based approaches |
 | **Soft topic assignments** | Computes per-document probability distributions over all topics, not just hard labels |
 | **Post-fit outlier reduction** | Reassigns outlier documents using centroid similarity or neighbor voting after the model is fitted |
 | **Hierarchical topic merging** | Iteratively merges the most similar topic pairs to reach a target count, or manually merges specific topics |
@@ -81,12 +119,12 @@ On top of this multi-view graph, TriTopic applies **consensus Leiden clustering*
 | **TensorFlow Projector export** | Export embeddings and topic metadata for [projector.tensorflow.org](https://projector.tensorflow.org) with one call |
 | **scikit-learn compatible** | Familiar `fit()` / `transform()` / `fit_transform()` API |
 | **Save and load** | Full model persistence including fitted reducer, probabilities, and graph state |
-| **Cumulative / batch-wise clustering** | Cluster documents that arrive in batches and accumulate over time, with drift-triggered reclustering, stable topic IDs, and a high-level "bigger picture" across all data — see [`tritopic/cumulative/README.md`](tritopic/cumulative/README.md) |
+| **Cumulative / batch-wise clustering** | Cluster documents that arrive in batches and accumulate over time, with drift-triggered reclustering, stable topic IDs, and a high-level "bigger picture" across all data — see [`graphweave/cumulative/README.md`](graphweave/cumulative/README.md) |
 
-> **Streaming your data in batches?** TriTopic also ships a separate cumulative /
-> batch-wise workflow (`tritopic.cumulative.CumulativeTriTopic`) that layers on top of
+> **Streaming your data in batches?** GraphWeave also ships a separate cumulative /
+> batch-wise workflow (`graphweave.cumulative.CumulativeGraphWeave`) that layers on top of
 > the full-batch pipeline below **without changing it**. See the dedicated guide:
-> [**Cumulative / Batch-wise Clustering →**](tritopic/cumulative/README.md)
+> [**Cumulative / Batch-wise Clustering →**](graphweave/cumulative/README.md)
 > (quality report: [`LEARNING_GUIDE/CUMULATIVE_QUALITY_REPORT.md`](LEARNING_GUIDE/CUMULATIVE_QUALITY_REPORT.md)).
 
 ---
@@ -95,25 +133,43 @@ On top of this multi-view graph, TriTopic applies **consensus Leiden clustering*
 
 ```bash
 # Core installation
-pip install tritopic
+pip install graphweave
 
 # With LLM labeling support (Claude / GPT-4 / Gemini)
-pip install tritopic[llm]
+pip install graphweave[llm]
 
 # With LLM-guided embedding fine-tuning (adds datasets, accelerate)
-pip install tritopic[adaptation]
+pip install graphweave[adaptation]
 
 # Full installation (all optional features, including GPU support)
-pip install tritopic[full]
+pip install graphweave[full]
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/SmartVisions-AI/tritopic.git
-cd tritopic
+git clone https://github.com/nevil-mathew/topic-extraction-poc.git
+cd topic-extraction-poc
 pip install -e ".[dev]"
 ```
+
+### Which extra do I need?
+
+| I want to... | Install |
+|---|---|
+| Just cluster documents (no LLM, no GPU) | `pip install graphweave` |
+| Generate LLM topic labels / calibration / report themes | `pip install graphweave[llm]` |
+| Fine-tune embeddings with LLM-guided triplets | `pip install graphweave[adaptation]` |
+| Speed up kNN search on large corpora (HNSW) | `pip install graphweave[fast-knn]` |
+| Use a GPU (cosine similarity, kNN, refinement) | `pip install graphweave[gpu]` |
+| Run `run_benchmark.py` against BERTopic/LDA/NMF | `pip install graphweave[benchmark]` |
+| Use the legacy `consensus_method="hierarchical"` path with `fastcluster` | `pip install graphweave[legacy-consensus]` |
+| LLM + fast-knn + GPU + adaptation, all at once | `pip install graphweave[full]` |
+| Contribute to GraphWeave itself (tests, lint, type-check) | `pip install -e ".[dev]"` |
+
+`full` bundles `llm`, `fast-knn`, `gpu`, and `adaptation` — it does **not** include
+`legacy-consensus` or `benchmark`, which pull in extra dependencies (`fastcluster`, `bertopic`)
+that most users never need. Install those two separately if you want them.
 
 ### Dependencies
 
@@ -127,7 +183,7 @@ pip install -e ".[dev]"
 
 ### GPU Acceleration (optional)
 
-TriTopic can offload the most compute-intensive steps to one or more CUDA GPUs.
+GraphWeave can offload the most compute-intensive steps to one or more CUDA GPUs.
 CPU is always the automatic fallback — no code changes required and no errors if
 torch / FAISS / cuML are absent.
 
@@ -146,7 +202,7 @@ torch / FAISS / cuML are absent.
 
 ```bash
 # PyTorch + FAISS — covers cosine similarity, refinement loop, and kNN
-pip install "tritopic[gpu]"
+pip install "graphweave[gpu]"
 
 # On a CUDA machine, swap faiss-cpu for the GPU build (CUDA 11 or 12):
 pip install faiss-gpu-cu11   # CUDA 11.x
@@ -155,7 +211,7 @@ pip install faiss-gpu-cu12   # CUDA 12.x
 # RAPIDS cuML — adds GPU UMAP and GPU MiniBatchKMeans
 # Install via conda (cuML has no standard pip wheel):
 conda install -c rapidsai -c conda-forge cuml=24.06 cuda-version=12.0
-# Once installed, TriTopic detects cuML automatically — no further config needed.
+# Once installed, GraphWeave detects cuML automatically — no further config needed.
 ```
 
 #### Multi-GPU behaviour
@@ -174,7 +230,7 @@ falls back to the CPU implementation silently.
 ## Quick Start
 
 ```python
-from tritopic import TriTopic
+from graphweave import GraphWeave
 
 documents = [
     "Machine learning is transforming healthcare diagnostics",
@@ -185,7 +241,7 @@ documents = [
     # ... hundreds or thousands of documents
 ]
 
-model = TriTopic(verbose=True)
+model = GraphWeave(verbose=True)
 labels = model.fit_transform(documents)
 
 # View discovered topics
@@ -195,21 +251,22 @@ print(model.get_topic_info())
 **Output:**
 
 ```
-TriTopic: Fitting model on 1000 documents
+[GraphWeave] Fitting model on 1000 documents
    Config: hybrid graph, iterative mode
-   -> Generating embeddings (all-MiniLM-L6-v2)...
-   -> Reducing dimensions to 10d (umap)...
-   -> Building lexical similarity matrix...
-   -> Starting iterative refinement (max 5 iterations)...
-      Iteration 1...
-      Iteration 2...
+   > Encoding 1000 documents (all-MiniLM-L6-v2)...
+   > Reducing dimensions to 10d (UMAP)...
+   > Building TF-IDF lexical matrix...
+   > Running Leiden consensus clustering (10 runs)...
+   > Starting iterative refinement (max 5 iterations)...
+      Iteration 1 / 5...
+      Iteration 2 / 5...
          ARI vs previous: 0.9234
-      Iteration 3...
+      Iteration 3 / 5...
          ARI vs previous: 0.9812
       Converged at iteration 3
-   -> Extracting keywords and representative documents...
+   > Extracting keywords and representative documents...
 
-Fitting complete!
+[OK] Fitting complete!  (total: 4.2 s)
    Found 12 topics
    47 outlier documents (4.7%)
 ```
@@ -248,15 +305,15 @@ new_proba = model.transform_proba(new_docs)
 ```python
 model.save("my_model.pkl")
 
-from tritopic import TriTopic
-loaded = TriTopic.load("my_model.pkl")
+from graphweave import GraphWeave
+loaded = GraphWeave.load("my_model.pkl")
 ```
 
 ---
 
 ## The Pipeline
 
-TriTopic processes documents through a multi-stage pipeline:
+GraphWeave processes documents through a multi-stage pipeline:
 
 ```
 Documents
@@ -318,12 +375,12 @@ Documents
 
 ## Configuration Reference
 
-All parameters are set through `TriTopicConfig` or as constructor overrides:
+All parameters are set through `GraphWeaveConfig` or as constructor overrides:
 
 ```python
-from tritopic import TriTopic, TriTopicConfig
+from graphweave import GraphWeave, GraphWeaveConfig
 
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     # --- Embedding ---
     embedding_model="all-MiniLM-L6-v2",   # sentence-transformers model (local) or API model name
     embedding_batch_size=32,               # local GPU batch size
@@ -390,13 +447,13 @@ config = TriTopicConfig(
     n_jobs=-1,                             # parallelism: -1 = all cores (kNN, ARI); Leiden runs capped at 4
 )
 
-model = TriTopic(config=config)
+model = GraphWeave(config=config)
 ```
 
 **Quick overrides** without creating a config object:
 
 ```python
-model = TriTopic(
+model = GraphWeave(
     embedding_model="all-mpnet-base-v2",
     n_neighbors=20,
     use_iterative_refinement=True,
@@ -408,7 +465,7 @@ model = TriTopic(
 You can also modify the config after construction:
 
 ```python
-model = TriTopic()
+model = GraphWeave()
 model.config.use_dim_reduction = False       # disable dim reduction
 model.config.graph_type = "snn"              # use pure SNN graph
 model.config.keyword_method = "bm25"         # switch keyword method
@@ -428,7 +485,7 @@ The fundamental problem with an absolute number is **scale sensitivity**: a comm
 ### Recommended: use `min_cluster_fraction`
 
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     min_cluster_fraction=0.005,   # 0.5% of corpus — the one number to tune
     # min_cluster_size stays at default=5 (acts as absolute floor only)
 )
@@ -464,7 +521,7 @@ This design follows three converging lines of reasoning:
 
 1. **Scale invariance** — standard statistical practice prefers relative thresholds over absolute counts when the input size is variable. An absolute cutoff optimised for one corpus size is arbitrary at another.
 
-2. **HDBSCAN community practice** — McInnes, Healy & Astels (2017) recommend expressing `min_cluster_size` as "roughly 1–5% of dataset size" in practice. TriTopic uses Leiden, not HDBSCAN, but the same post-clustering size filter has the same scale-sensitivity problem.
+2. **HDBSCAN community practice** — McInnes, Healy & Astels (2017) recommend expressing `min_cluster_size` as "roughly 1–5% of dataset size" in practice. GraphWeave uses Leiden, not HDBSCAN, but the same post-clustering size filter has the same scale-sensitivity problem.
 
 3. **Resolution limit in community detection** — Fortunato & Barthélemy (2007) proved that modularity-based community detectors have a resolution limit that scales with graph size: communities become undetectable below a minimum size that grows with N. A fixed absolute filter is inconsistent with this limit as the corpus grows.
 
@@ -472,36 +529,36 @@ This design follows three converging lines of reasoning:
 
 ## Memory Optimization for Large Datasets
 
-TriTopic handles **100,000+ documents on a laptop** out of the box. This section explains why, and what knobs to reach for if you ever hit a wall.
+GraphWeave handles **100,000+ documents on a laptop** out of the box. This section explains why, and what knobs to reach for if you ever hit a wall.
 
-### The original problem (before 2.3.0)
+### The underlying problem
 
-To find stable topics, TriTopic runs Leiden clustering 10 times and then asks: *"How often did each pair of documents end up in the same cluster?"* This pairwise tally is a **co-occurrence matrix** of size N × N.
+To find stable topics, GraphWeave runs Leiden clustering 10 times and then asks: *"How often did each pair of documents end up in the same cluster?"* This pairwise tally is a **co-occurrence matrix** of size N × N.
 
-Older versions densified that matrix and ran hierarchical clustering (`scipy.linkage`) on it. Both steps scale as N²:
+A naive implementation would densify that matrix and run hierarchical clustering (`scipy.linkage`) on it. Both steps scale as N²:
 
-| Documents (N) | N × N cells | Old peak memory |
+| Documents (N) | N × N cells | Dense-path peak memory |
 |---|---|---|
 | 5,000 | 25 M | ~0.6 GB |
 | 20,000 | 400 M | ~10 GB |
 | 50,000 | 2.5 B | **~60 GB** (OOM on most machines) |
 | 100,000 | 10 B | **~240 GB** (will not fit anywhere) |
 
-### The 2.3.0 default: graph consensus
+### The default: graph consensus
 
-The new default `consensus_method="graph"` (Lancichinetti & Fortunato, *Consensus clustering in complex networks*, Sci. Rep. 2:336, 2012) replaces the dense matrix **and** the `scipy.linkage` step with a single Leiden pass on a thresholded sparse co-occurrence **graph**:
+The default `consensus_method="graph"` (Lancichinetti & Fortunato, *Consensus clustering in complex networks*, Sci. Rep. 2:336, 2012) replaces the dense matrix **and** the `scipy.linkage` step with a single Leiden pass on a thresholded sparse co-occurrence **graph**:
 
 1. Keep only document pairs that co-cluster in at least `consensus_threshold_tau` (default **0.5**, i.e. 5 out of 10 runs) of the Leiden runs.
 2. Build a weighted graph from those surviving pairs (typically <1% of N²).
 3. Run Leiden once on that graph — that is your consensus partition.
 
-| Documents (N) | Old (hierarchical) | New (graph, default) |
+| Documents (N) | Dense hierarchical path | Graph consensus (default) |
 |---|---|---|
 | 20,000 | ~10 GB | **~0.3 GB** |
 | 50,000 | ~60 GB | **~0.8 GB** |
 | 100,000 | ~240 GB | **~2 GB** |
 
-Quality is at least as good — the LF paper shows graph consensus improves stability and accuracy versus any single Leiden run. You do not need to do anything: the new default is on automatically.
+Quality is at least as good — the LF paper shows graph consensus improves stability and accuracy versus any single Leiden run. You do not need to do anything: the default is on automatically.
 
 > **Implementation note:** The co-occurrence matrix is accumulated in float32 (halving dtype overhead vs float64) and pruned after each Leiden run — entries that can no longer reach the τ threshold are dropped immediately, so the matrix stays sparse throughout rather than growing to its maximum at the final run. Parallel Leiden runs are capped at 4 concurrent threads regardless of `n_jobs`, preventing 10× peak C-level allocations from all runs landing in memory simultaneously.
 
@@ -511,13 +568,13 @@ Quality is at least as good — the LF paper shows graph consensus improves stab
 |---|---|
 | Any size, default install | **Nothing.** The default is already memory-safe with automatic float32, early pruning, and capped parallelism. |
 | You want stricter / looser consensus | Tune `consensus_threshold_tau` in `[0.3, 0.8]`. Higher τ = stricter (fewer, tighter topics). |
-| You want bit-for-bit identical results to TriTopic 2.2.x | Set `consensus_method="hierarchical"`. See below. |
-| You still hit an OOM crash | Lower `n_consensus_runs` (e.g. 5) or lower `consensus_threshold_tau` (e.g. 0.3, more aggressive pruning). |
+| You want bit-for-bit identical results to the legacy hierarchical path | Set `consensus_method="hierarchical"`. See below. |
+| You still hit an OOM crash | Lower `n_consensus_runs` (e.g. 5) or raise `consensus_threshold_tau` (e.g. 0.7, more aggressive pruning). |
 
 ### Tuning the consensus threshold τ
 
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     consensus_method="graph",          # default
     consensus_threshold_tau=0.5,       # default
 )
@@ -534,7 +591,7 @@ The LF paper reports results are robust across `τ ∈ [0.3, 0.8]`, so this is a
 The old hierarchical-linkage path is still available for backwards compatibility:
 
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     consensus_method="hierarchical",   # legacy
     low_memory=True,                   # use sparse co-occurrence (still N² in the worst case)
 )
@@ -543,7 +600,7 @@ config = TriTopicConfig(
 For best results in legacy mode, install the `legacy-consensus` extra — it adds `fastcluster`, a C++ replacement for `scipy.linkage` that is ~2-5× faster and avoids a hidden float64 copy:
 
 ```bash
-pip install tritopic[legacy-consensus]
+pip install graphweave[legacy-consensus]
 ```
 
 ### What does `low_memory=True` still do?
@@ -557,7 +614,7 @@ In **hierarchical mode**, `low_memory=True` keeps the co-occurrence sparse and b
 The main consensus optimizations (float32, early pruning, 4-thread cap) are automatic. If you still need more room, these knobs trade a little quality for memory:
 
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     max_iterations=2,            # was 5. Refinement gains are mostly in rounds 1-2.
     n_consensus_runs=5,          # was 10. Fewer runs = smaller co-occurrence matrix peak.
     convergence_threshold=0.90,  # was 0.95. Stops one iteration sooner.
@@ -573,11 +630,11 @@ Lowering `n_consensus_runs` is the strongest lever here: fewer runs means the co
 The semantic graph that drives Leiden clustering relies on a kNN search over
 document embeddings. For corpora above a few thousand documents the exact
 `O(n²)` search becomes the dominant fit cost — and it runs once per
-refinement iteration. TriTopic 2.3.0 ships an **adaptive backend** that
+refinement iteration. GraphWeave ships an **adaptive backend** that
 chooses between exact and approximate (HNSW) search based on corpus size:
 
 | Corpus size       | Backend (priority)              | Notes                  |
-|-------------------|---------------------------------|------------------------|
+|-------------------|----------------------------------|------------------------|
 | < 5,000 docs      | exact (sklearn)                 | —                      |
 | ≥ 5,000 docs      | FAISS GPU *(if `gpu` extra + CUDA)* | exact, fastest    |
 | ≥ 5,000 docs      | FAISS CPU *(if `gpu` extra, no CUDA)* | exact, fast     |
@@ -591,23 +648,23 @@ output regardless of which backend ran.
 ### Enabling the FAISS path (recommended)
 
 ```bash
-pip install "tritopic[gpu]"        # includes faiss-cpu + torch
+pip install "graphweave[gpu]"        # includes faiss-cpu + torch
 pip install faiss-gpu              # optional: swap in GPU FAISS on CUDA machines
 ```
 
 ### Enabling the HNSW path (CPU-only alternative)
 
 ```bash
-pip install "tritopic[fast-knn]"
+pip install "graphweave[fast-knn]"
 ```
 
 When neither extra is installed, `knn_backend="auto"` silently falls back to
-the exact sklearn path — no behavior change vs. earlier TriTopic releases.
+the exact sklearn path.
 
 ### Configuration
 
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     knn_backend="auto",            # "auto" | "exact" | "hnsw"
     hnsw_small_threshold=5_000,    # below this, "auto" stays on exact
     hnsw_large_threshold=50_000,   # at/above this, HNSW switches to (M=32, ef=400)
@@ -681,16 +738,16 @@ You can ignore the warning and use the resulting model normally.
 | `ValueError: Found array with 0 sample(s)` in `transform()` | `min_cluster_size` too large — all Leiden communities filtered to outliers | Lower `min_cluster_size`, or switch to `min_cluster_fraction=0.005` |
 | Too few large topics | `resolution` too low | Raise `resolution` (e.g. 1.3) or set `n_topics=N` |
 | 30%+ outliers | HDBSCAN-like over-pruning of small clusters | Call `model.reduce_outliers(strategy="embeddings")` after fit |
-| LLM labels are empty / generic | API call failed silently in earlier versions | v2.3.0+ retries with backoff; check API key and rate limits |
+| LLM labels are empty / generic | API call failed silently | Retries with backoff automatically; check API key and rate limits |
 
 ---
 
 ## Dimensionality Reduction
 
-kNN graphs built on high-dimensional embeddings (384-768d) suffer from the curse of dimensionality: distances concentrate and neighbor quality degrades. TriTopic addresses this by reducing embeddings to a low-dimensional space before graph construction.
+kNN graphs built on high-dimensional embeddings (384-768d) suffer from the curse of dimensionality: distances concentrate and neighbor quality degrades. GraphWeave addresses this by reducing embeddings to a low-dimensional space before graph construction.
 
 ```python
-model = TriTopic()
+model = GraphWeave()
 model.config.use_dim_reduction = True        # enabled by default
 model.config.reduced_dims = 10               # target dimensions
 model.config.dim_reduction_method = "umap"   # or "pacmap"
@@ -823,7 +880,7 @@ This is useful when you inspect topics and find two that clearly cover the same 
 
 ## Keyword Extraction
 
-TriTopic supports three keyword extraction methods:
+GraphWeave supports three keyword extraction methods:
 
 ### c-TF-IDF (default)
 
@@ -888,9 +945,9 @@ Generate human-readable topic names using Claude, GPT-4, or Gemini.
 ### With Claude (Anthropic)
 
 ```python
-from tritopic import TriTopic, LLMLabeler
+from graphweave import GraphWeave, LLMLabeler
 
-model = TriTopic()
+model = GraphWeave()
 model.fit(documents)
 
 labeler = LLMLabeler(
@@ -959,7 +1016,7 @@ labeler = LLMLabeler(
 )
 ```
 
-Install the required extra: `pip install tritopic[llm]` (includes all providers).
+Install the required extra: `pip install graphweave[llm]` (includes all providers).
 
 ### Controlling prompt size
 
@@ -982,12 +1039,12 @@ labeler = LLMLabeler(
 )
 ```
 
-> **Note:** `n_docs` draws from the representative documents stored at fit time, which are the docs closest to the topic centroid. If you set `n_docs` higher than `TriTopicConfig.n_representative_docs` (default 5), raise that value too:
+> **Note:** `n_docs` draws from the representative documents stored at fit time, which are the docs closest to the topic centroid. If you set `n_docs` higher than `GraphWeaveConfig.n_representative_docs` (default 5), raise that value too:
 >
 > ```python
-> from tritopic import TriTopic, TriTopicConfig
-> config = TriTopicConfig(n_representative_docs=10)
-> model = TriTopic(config=config)
+> from graphweave import GraphWeave, GraphWeaveConfig
+> config = GraphWeaveConfig(n_representative_docs=10)
+> model = GraphWeave(config=config)
 > model.fit(documents)
 >
 > labeler = LLMLabeler(provider="anthropic", api_key="...", n_docs=8)
@@ -997,7 +1054,7 @@ labeler = LLMLabeler(
 ### Simple labeler (no API needed)
 
 ```python
-from tritopic import SimpleLabeler
+from graphweave import SimpleLabeler
 
 labeler = SimpleLabeler(n_words=3)
 model.generate_labels(labeler)
@@ -1012,7 +1069,7 @@ model.generate_labels(labeler, topics=[0, 3, 5])
 
 ### Two label styles: `short` vs `theme`
 
-`LLMLabeler` now accepts a `style` parameter that controls how rich the output is:
+`LLMLabeler` accepts a `style` parameter that controls how rich the output is:
 
 | Style | Title length | Description length | Use for |
 |-------|--------------|-------------------|---------|
@@ -1036,7 +1093,7 @@ The theme style automatically:
 
 ### Automatic duplicate-label prevention
 
-Both styles now run with **sequential dedup context** by default: each topic is labeled with awareness of all topics labeled before it in the same run, and the LLM is explicitly instructed to name a distinguishing mechanism if its cluster overlaps thematically with an earlier one.
+Both styles run with **sequential dedup context** by default: each topic is labeled with awareness of all topics labeled before it in the same run, and the LLM is explicitly instructed to name a distinguishing mechanism if its cluster overlaps thematically with an earlier one.
 
 After the main loop, a **cleanup pass** finds any remaining exact-duplicate or shared-prefix labels (e.g., two topics both labeled "Systemic Barriers to Educational Access") and regenerates them with explicit "make these distinct" instructions.
 
@@ -1061,9 +1118,9 @@ The idea: sample `(A, B, C)` document triplets where `B` is A's nearest neighbor
 This is **fully opt-in** — it is never invoked by `fit()` or by `n_topics=<int>`, and it does not change the behavior of the existing resolution-search paths.
 
 ```python
-from tritopic import TriTopic, LLMLabeler
+from graphweave import GraphWeave, LLMLabeler
 
-model = TriTopic().fit(documents)
+model = GraphWeave().fit(documents)
 
 labeler = LLMLabeler(provider="anthropic", api_key="...", model="claude-haiku-4-5")
 model.tune_resolution_with_llm(labeler)
@@ -1119,16 +1176,16 @@ A flat score column (all values within ~0.02 of each other) means the LLM couldn
 
 ## LLM-Guided Embedding Adaptation
 
-TriTopic's embedder is fixed and off-the-shelf by default (`all-MiniLM-L6-v2`, or an API model). On a narrow, domain-specific corpus that's the real quality ceiling — the graph, Leiden consensus, and refinement loop can only rearrange whatever geometry the embedder already gives them. `tritopic.adaptation` closes that gap: it asks an LLM to judge a small budget of triplet comparisons on *your* documents, then adapts the embedder to those judgments — the triplet fine-tuning approach from **ClusterLLM** (Zhang, Wang & Shang, EMNLP 2023), with sampling/evaluation ideas from **PRISM** (Douglas, Balci & Aylett-Bullock, WWW 2026) and the LLM keyphrase-expansion / low-confidence-correction techniques from **Viswanathan et al.**, *"Large Language Models Enable Few-Shot Clustering"* (TACL 2024).
+GraphWeave's embedder is fixed and off-the-shelf by default (`all-MiniLM-L6-v2`, or an API model). On a narrow, domain-specific corpus that's the real quality ceiling — the graph, Leiden consensus, and refinement loop can only rearrange whatever geometry the embedder already gives them. `graphweave.adaptation` closes that gap: it asks an LLM to judge a small budget of triplet comparisons on *your* documents, then adapts the embedder to those judgments — the triplet fine-tuning approach from **ClusterLLM** (Zhang, Wang & Shang, EMNLP 2023), with sampling/evaluation ideas from **PRISM** (Douglas, Balci & Aylett-Bullock, WWW 2026) and the LLM keyphrase-expansion / low-confidence-correction techniques from **Viswanathan et al.**, *"Large Language Models Enable Few-Shot Clustering"* (TACL 2024).
 
-It lives in a self-contained `tritopic.adaptation` subpackage — same opt-in philosophy as `tune_resolution_with_llm`: never invoked automatically, and importing it doesn't pull in any extra dependencies until you actually fine-tune.
+It lives in a self-contained `graphweave.adaptation` subpackage — same opt-in philosophy as `tune_resolution_with_llm`: never invoked automatically, and importing it doesn't pull in any extra dependencies until you actually fine-tune.
 
 **Notebooks:** [`notebooks/embedding_adaptation_demo.ipynb`](notebooks/embedding_adaptation_demo.ipynb) proves the pipeline for free (a fake oracle labeler, no API key, no GPU); [`notebooks/embedding_adaptation_kaggle.ipynb`](notebooks/embedding_adaptation_kaggle.ipynb) runs the real thing on your own CSV — OpenRouter for triplet judgments, real `all-MiniLM-L6-v2` fine-tuning on a Kaggle GPU, plus both bonus extras below.
 
 ```python
-from tritopic import TriTopic, LLMLabeler
+from graphweave import GraphWeave, LLMLabeler
 
-model = TriTopic().fit(documents)
+model = GraphWeave().fit(documents)
 
 labeler = LLMLabeler(provider="anthropic", api_key="...", model="claude-haiku-4-5")
 model.adapt_embeddings_with_llm(labeler)   # refits in place with the adapted embeddings
@@ -1143,20 +1200,20 @@ print(model.adaptation_diagnostics_["holdout_triplet_acc_after"])
 2. **Ask the LLM** which of `B` or `C` the anchor is more similar to, in batches — reusing the same bias-mitigated (swap-randomized), cached, structured-output query machinery as `tune_resolution_with_llm`.
 3. **Hold out ~20%** of the judged triplets before any training, so "did this help" can always be measured on judgments the adapter never saw.
 4. **Adapt the embedder** with one of two backends (below), trained on `(anchor, positive, negative)` triples the LLM actually judged — not just the pre-existing cluster labels.
-5. **Refit** TriTopic on the adapted embeddings and report before/after metrics.
+5. **Refit** GraphWeave on the adapted embeddings and report before/after metrics.
 
 ### Two backends
 
 | Mode | Requires | Works with |
 |---|---|---|
 | `"linear"` | numpy only | any embedder, including API-based ones (Gemini) — the practical default on CPU-only machines |
-| `"finetune"` | `pip install "tritopic[adaptation]"` (adds `datasets`, `accelerate`) | local sentence-transformers models only |
+| `"finetune"` | `pip install "graphweave[adaptation]"` (adds `datasets`, `accelerate`) | local sentence-transformers models only |
 | `"auto"` (default) | — | picks `"finetune"` when possible, else `"linear"` with a warning |
 
 `"linear"` trains an identity-initialized d×d matrix on top of frozen embeddings with a cosine hinge triplet loss, shrunk toward the identity by an L2 penalty so noisy LLM judgments can't push it far from the base geometry — cheap, CPU-friendly, and the only option for embedders you can't fine-tune. `"finetune"` runs a real 1-epoch, low-LR sentence-transformers fine-tune (`MultipleNegativesRankingLoss` by default) — the full ClusterLLM recipe.
 
 ```python
-from tritopic.adaptation import AdaptationConfig
+from graphweave.adaptation import AdaptationConfig
 
 model.adapt_embeddings_with_llm(
     labeler,
@@ -1172,10 +1229,10 @@ model.adapt_embeddings_with_llm(
 
 ### Did it actually help? (`compare_embedders`)
 
-Fine-tuning without a way to check for regressions is how bugs ship. `compare_embedders` fits an *identical* TriTopic config on baseline vs. adapted embeddings and tabulates intrinsic metrics (silhouette, Davies–Bouldin, Calinski–Harabasz, consensus stability), held-out triplet accuracy (label-free — works on your own unlabeled corpus), and — when you have ground truth (e.g. a labeled benchmark corpus) — ARI/NMI/cluster accuracy:
+Fine-tuning without a way to check for regressions is how bugs ship. `compare_embedders` fits an *identical* GraphWeave config on baseline vs. adapted embeddings and tabulates intrinsic metrics (silhouette, Davies–Bouldin, Calinski–Harabasz, consensus stability), held-out triplet accuracy (label-free — works on your own unlabeled corpus), and — when you have ground truth (e.g. a labeled benchmark corpus) — ARI/NMI/cluster accuracy:
 
 ```python
-from tritopic.adaptation import adapt_and_refit
+from graphweave.adaptation import adapt_and_refit
 
 new_model, report = adapt_and_refit(model, labeler)
 print(report["comparison"])
@@ -1188,8 +1245,8 @@ print(report["comparison"])
 Two additional, independent levers from Viswanathan et al. (TACL 2024) — useful with any embedder, including API-based ones:
 
 ```python
-from tritopic import EmbeddingEngine
-from tritopic.adaptation import generate_keyphrases, keyphrase_expand_embeddings, reassign_low_confidence
+from graphweave import EmbeddingEngine
+from graphweave.adaptation import generate_keyphrases, keyphrase_expand_embeddings, reassign_low_confidence
 
 # LLM keyphrase expansion: blend per-document keyphrases into the embedding
 engine = EmbeddingEngine(model_name=model.config.embedding_model, provider=model.config.embedding_provider)
@@ -1202,23 +1259,23 @@ corrections = reassign_low_confidence(model, labeler, margin_threshold=0.15, max
 
 **Cost**: same batched-query economics as `tune_resolution_with_llm` — a few hundred to ~1000 triplets, ~8 per LLM call, cached to disk. On Claude Haiku 4.5, a full 1000-triplet adaptation run costs well under $1.
 
-**Detachability**: `tritopic.adaptation` is designed to be lifted into its own package later — it imports only numpy/scipy/scikit-learn/pandas/sentence-transformers plus one small compatibility shim into the existing triplet-sampling code, never the rest of TriTopic's internals.
+**Detachability**: `graphweave.adaptation` is designed to be lifted into its own package later — it imports only numpy/scipy/scikit-learn/pandas/sentence-transformers plus one small compatibility shim into the existing triplet-sampling code, never the rest of GraphWeave's internals.
 
 ---
 
 ## Report Themes (qualitative research output)
 
-For deliverables like a Findings section in a research report, an 85-topic catalog is too granular. TriTopic can synthesize all per-topic labels into a small number of **emerging meta-themes** — each a 5–8 word evocative title plus a 4–6 sentence narrative paragraph that quotes participants and names the underlying pattern.
+For deliverables like a Findings section in a research report, an 85-topic catalog is too granular. GraphWeave can synthesize all per-topic labels into a small number of **emerging meta-themes** — each a 5–8 word evocative title plus a 4–6 sentence narrative paragraph that quotes participants and names the underlying pattern.
 
 ### End-to-end workflow
 
 ```python
-from tritopic import TriTopic, TriTopicConfig, LLMLabeler
+from graphweave import GraphWeave, GraphWeaveConfig, LLMLabeler
 
 # 1. Fit the model (standard)
-model = TriTopic(
+model = GraphWeave(
     n_neighbors=10,
-    config=TriTopicConfig(
+    config=GraphWeaveConfig(
         embedding_model="BAAI/bge-m3",
         consensus_method="graph",
         resolution=0.75,
@@ -1405,7 +1462,7 @@ fig.show()
 Cosine similarity matrix between all topic centroids:
 
 ```python
-from tritopic import TopicVisualizer
+from graphweave import TopicVisualizer
 
 viz = TopicVisualizer()
 fig = viz.plot_topic_similarity(model.topic_embeddings_, model.topics_)
@@ -1417,7 +1474,7 @@ fig.show()
 Stacked area chart showing topic prevalence over time (requires timestamps):
 
 ```python
-from tritopic import TopicVisualizer
+from graphweave import TopicVisualizer
 
 viz = TopicVisualizer()
 fig = viz.plot_topic_over_time(
@@ -1450,7 +1507,7 @@ Returns a dictionary with:
 Additional metrics are available as standalone functions:
 
 ```python
-from tritopic.utils.metrics import (
+from graphweave.utils.metrics import (
     compute_coherence,
     compute_diversity,
     compute_stability,
@@ -1481,7 +1538,7 @@ from sentence_transformers import SentenceTransformer
 encoder = SentenceTransformer("BAAI/bge-large-en-v1.5")
 embeddings = encoder.encode(documents)
 
-model = TriTopic()
+model = GraphWeave()
 model.fit(documents, embeddings=embeddings)
 ```
 
@@ -1490,8 +1547,8 @@ model.fit(documents, embeddings=embeddings)
 Combine embeddings from multiple models for richer representations:
 
 ```python
-from tritopic import EmbeddingEngine
-from tritopic.core.embeddings import MultiModelEmbedding
+from graphweave import EmbeddingEngine
+from graphweave.core.embeddings import MultiModelEmbedding
 
 multi = MultiModelEmbedding(
     model_names=["all-MiniLM-L6-v2", "all-mpnet-base-v2"],
@@ -1499,7 +1556,7 @@ multi = MultiModelEmbedding(
 )
 embeddings = multi.encode(documents)
 
-model = TriTopic()
+model = GraphWeave()
 model.fit(documents, embeddings=embeddings)
 ```
 
@@ -1515,7 +1572,7 @@ metadata = pd.DataFrame({
     "category": ["tech", "science", "tech", ...],
 })
 
-model = TriTopic()
+model = GraphWeave()
 model.config.use_metadata_view = True
 model.config.metadata_weight = 0.2
 
@@ -1529,9 +1586,9 @@ Categorical columns create edges between documents with matching values. Numeric
 Use `n_topics` to automatically find the Leiden resolution that produces a specific number of topics:
 
 ```python
-model = TriTopic(n_topics=10)
+model = GraphWeave(n_topics=10)
 model.fit(documents)
-# TriTopic uses bidirectional resolution search to find ~10 topics
+# GraphWeave uses bidirectional resolution search to find ~10 topics
 ```
 
 ### Finding the optimal resolution
@@ -1539,7 +1596,7 @@ model.fit(documents)
 The resolution parameter controls how many topics Leiden produces. You can search for the best value:
 
 ```python
-from tritopic.core.clustering import ConsensusLeiden
+from graphweave.core.clustering import ConsensusLeiden
 
 # After initial fit
 clusterer = ConsensusLeiden()
@@ -1560,7 +1617,7 @@ model.fit(documents)
 
 ```python
 # No iterative refinement (faster, less accurate)
-model = TriTopic(use_iterative_refinement=False)
+model = GraphWeave(use_iterative_refinement=False)
 
 # No dimensionality reduction
 model.config.use_dim_reduction = False
@@ -1572,10 +1629,10 @@ model.config.use_lexical_view = False
 ### Complete workflow
 
 ```python
-from tritopic import TriTopic, TriTopicConfig, LLMLabeler
+from graphweave import GraphWeave, GraphWeaveConfig, LLMLabeler
 
 # 1. Configure
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     embedding_model="all-mpnet-base-v2",
     n_neighbors=20,
     graph_type="hybrid",
@@ -1590,7 +1647,7 @@ config = TriTopicConfig(
 )
 
 # 2. Fit
-model = TriTopic(config=config)
+model = GraphWeave(config=config)
 model.fit(documents)
 
 # 3. Reduce outliers
@@ -1621,7 +1678,7 @@ model.save("production_model.pkl")
 
 ## API Reference
 
-### TriTopic
+### GraphWeave
 
 The main model class. Follows the scikit-learn fit/transform pattern.
 
@@ -1649,7 +1706,7 @@ The main model class. Follows the scikit-learn fit/transform pattern.
 | `visualize_topics(n_keywords?, ...)` | Keyword bar charts per topic. |
 | `visualize_hierarchy(...)` | Topic dendrogram. |
 | `save(path)` | Pickle model to disk (includes all state, reducer, probabilities). |
-| `TriTopic.load(path)` | Class method to load a saved model. |
+| `GraphWeave.load(path)` | Class method to load a saved model. |
 
 ### Key attributes after fit
 
@@ -1682,17 +1739,17 @@ The main model class. Follows the scikit-learn fit/transform pattern.
 
 | Class | Module | Purpose |
 |---|---|---|
-| `TriTopicConfig` | `tritopic.core.model` | All configuration parameters (see [Configuration Reference](#configuration-reference)) |
-| `EmbeddingEngine` | `tritopic.core.embeddings` | Encode documents with sentence-transformers (local) or Google Gemini API. Supports Instructor, BGE, and API-based models. |
-| `MultiModelEmbedding` | `tritopic.core.embeddings` | Combine embeddings from multiple models. |
-| `GraphBuilder` | `tritopic.core.graph_builder` | Build kNN, mutual kNN, SNN, hybrid, lexical, and metadata graphs. |
-| `ConsensusLeiden` | `tritopic.core.clustering` | Leiden clustering with consensus and resolution search. |
-| `HDBSCANClusterer` | `tritopic.core.clustering` | Alternative HDBSCAN clustering. |
-| `KeywordExtractor` | `tritopic.core.keywords` | c-TF-IDF, BM25, and KeyBERT keyword extraction. |
-| `KeyphraseExtractor` | `tritopic.core.keywords` | Multi-word keyphrase extraction (YAKE). |
-| `LLMLabeler` | `tritopic.labeling.llm_labeler` | Generate labels via Claude or GPT-4. |
-| `SimpleLabeler` | `tritopic.labeling.llm_labeler` | Rule-based labels from top keywords. |
-| `TopicVisualizer` | `tritopic.visualization.plotter` | All Plotly visualizations. |
+| `GraphWeaveConfig` | `graphweave.core.model` | All configuration parameters (see [Configuration Reference](#configuration-reference)) |
+| `EmbeddingEngine` | `graphweave.core.embeddings` | Encode documents with sentence-transformers (local) or Google Gemini API. Supports Instructor, BGE, and API-based models. |
+| `MultiModelEmbedding` | `graphweave.core.embeddings` | Combine embeddings from multiple models. |
+| `GraphBuilder` | `graphweave.core.graph_builder` | Build kNN, mutual kNN, SNN, hybrid, lexical, and metadata graphs. |
+| `ConsensusLeiden` | `graphweave.core.clustering` | Leiden clustering with consensus and resolution search. |
+| `HDBSCANClusterer` | `graphweave.core.clustering` | Alternative HDBSCAN clustering. |
+| `KeywordExtractor` | `graphweave.core.keywords` | c-TF-IDF, BM25, and KeyBERT keyword extraction. |
+| `KeyphraseExtractor` | `graphweave.core.keywords` | Multi-word keyphrase extraction (YAKE). |
+| `LLMLabeler` | `graphweave.labeling.llm_labeler` | Generate labels via Claude or GPT-4. |
+| `SimpleLabeler` | `graphweave.labeling.llm_labeler` | Rule-based labels from top keywords. |
+| `TopicVisualizer` | `graphweave.visualization.plotter` | All Plotly visualizations. |
 
 ---
 
@@ -1710,7 +1767,7 @@ The main model class. Follows the scikit-learn fit/transform pattern.
 
 ### Consensus clustering
 
-Running Leiden once is sensitive to random initialization. TriTopic runs it `n_consensus_runs` times (default: 10) with different seeds and builds a co-occurrence matrix recording how often each document pair was assigned to the same cluster. Hierarchical clustering (average linkage) on this matrix produces the final partition, selected by maximizing the average ARI with all individual runs. The stability score (average pairwise ARI across runs) quantifies how reproducible the clustering is.
+Running Leiden once is sensitive to random initialization. GraphWeave runs it `n_consensus_runs` times (default: 10) with different seeds and builds a co-occurrence graph recording how often each document pair was assigned to the same cluster (see [Memory Optimization](#memory-optimization-for-large-datasets) for the default graph-based consensus path, and the legacy dense/hierarchical alternative). The stability score (average pairwise ARI across runs) quantifies how reproducible the clustering is.
 
 ### Iterative refinement
 
@@ -1733,12 +1790,12 @@ Any model from the [sentence-transformers](https://www.sbert.net/) library works
 #### API-based embedding (Google Gemini)
 
 To use Google Gemini embeddings instead of a local model, set `embedding_provider="google"`.
-Requires: `pip install 'tritopic[llm]'`
+Requires: `pip install 'graphweave[llm]'`
 
 ```python
-from tritopic import TriTopic, TriTopicConfig
+from graphweave import GraphWeave, GraphWeaveConfig
 
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     embedding_provider="google",
     embedding_api_key="YOUR_GOOGLE_API_KEY",
     # Optional tuning:
@@ -1746,7 +1803,7 @@ config = TriTopicConfig(
     embedding_api_batch_size=100,    # docs per request (max 250)
     embedding_batch_delay=4.0,       # set ~4.0 on Gemini free tier (5–15 RPM)
 )
-model = TriTopic(config=config)
+model = GraphWeave(config=config)
 model.fit(documents)
 ```
 
@@ -1761,7 +1818,7 @@ model.fit(documents)
 
 **With `gemini-embedding-2` (default, best quality):**
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     embedding_provider="google",
     embedding_api_key="YOUR_GOOGLE_API_KEY",
     embedding_model="gemini-embedding-2",    # explicit; also the default
@@ -1769,19 +1826,19 @@ config = TriTopicConfig(
     embedding_api_batch_size=100,            # docs per request (max 250)
     embedding_batch_delay=4.0,               # ~4.0 for free tier; 0.0 for paid
 )
-model = TriTopic(config=config)
+model = GraphWeave(config=config)
 model.fit(documents)
 ```
 
 **With `gemini-embedding-001` (stable, supports task_type):**
 ```python
-config = TriTopicConfig(
+config = GraphWeaveConfig(
     embedding_provider="google",
     embedding_api_key="YOUR_GOOGLE_API_KEY",
     embedding_model="gemini-embedding-001",
     embedding_task_type="CLUSTERING",        # optimises embeddings for topic modeling
 )
-model = TriTopic(config=config)
+model = GraphWeave(config=config)
 model.fit(documents)
 ```
 
@@ -1791,7 +1848,7 @@ For `gemini-embedding-2`, `embedding_task_type` is automatically applied as a pr
 
 ## Comparison with BERTopic
 
-| Aspect | BERTopic | TriTopic |
+| Aspect | BERTopic | GraphWeave |
 |---|---|---|
 | **Graph construction** | kNN only | Mutual kNN + SNN hybrid |
 | **Dimensionality reduction** | UMAP (for clustering) | UMAP/PaCMAP (configurable) |
@@ -1818,16 +1875,16 @@ Evaluated on four standard text classification datasets against BERTopic, LDA (s
 
 | Model | Mean NMI | Mean Coherence (NPMI) | Mean Coverage | Wins (NMI) |
 |---|---|---|---|---|
-| **TriTopic** | **0.575** | **0.341** | **1.000** | **4/4 datasets** |
+| **GraphWeave** | **0.575** | **0.341** | **1.000** | **4/4 datasets** |
 | BERTopic | 0.513 | 0.233 | 0.808 | 0/4 |
 | NMF | 0.416 | 0.330 | 1.000 | 0/4 |
 | LDA | 0.299 | 0.161 | 1.000 | 0/4 |
 
-TriTopic achieves the **highest NMI on every single dataset** while maintaining 100% corpus coverage (zero outliers). BERTopic's HDBSCAN leaves 19.2% of documents unassigned on average.
+GraphWeave achieves the **highest NMI on every single dataset** while maintaining 100% corpus coverage (zero outliers). BERTopic's HDBSCAN leaves 19.2% of documents unassigned on average.
 
 ### Per-Dataset NMI
 
-| Dataset | Docs | k range | TriTopic | BERTopic | NMF | LDA |
+| Dataset | Docs | k range | GraphWeave | BERTopic | NMF | LDA |
 |---|---|---|---|---|---|---|
 | 20 Newsgroups | 2,000 | 10-50 | **0.532** | 0.519 | 0.319 | 0.158 |
 | BBC News | 1,225 | 3-20 | **0.702** | 0.642 | 0.648 | 0.505 |
@@ -1836,7 +1893,7 @@ TriTopic achieves the **highest NMI on every single dataset** while maintaining 
 
 ### Per-Dataset Coherence (NPMI)
 
-| Dataset | TriTopic | BERTopic | NMF | LDA |
+| Dataset | GraphWeave | BERTopic | NMF | LDA |
 |---|---|---|---|---|
 | 20 Newsgroups | **0.413** | 0.223 | 0.374 | 0.256 |
 | BBC News | **0.380** | 0.082 | 0.336 | 0.154 |
@@ -1848,14 +1905,14 @@ TriTopic achieves the **highest NMI on every single dataset** while maintaining 
 - All embeddings: `all-MiniLM-L6-v2` (384 dimensions)
 - BERTopic: default HDBSCAN settings with UMAP reduction
 - NMF / LDA: scikit-learn implementations with TF-IDF input
-- TriTopic: default settings (hybrid graph, consensus Leiden, iterative refinement)
+- GraphWeave: default settings (hybrid graph, consensus Leiden, iterative refinement)
 - 3 random seeds per configuration, results averaged
 - Full reproduction script: [`run_benchmark.py`](run_benchmark.py)
 
 ```bash
 # Full reproduction (needs network + `pip install -e ".[benchmark]"`): downloads
 # 20 Newsgroups / BBC News / AG News / Arxiv and all-MiniLM-L6-v2, then runs
-# TriTopic, BERTopic, NMF, and LDA across each dataset's documented k-range.
+# GraphWeave, BERTopic, NMF, and LDA across each dataset's documented k-range.
 python run_benchmark.py
 
 # Fast, no-download smoke test (synthetic data) — proves the harness runs
@@ -1868,9 +1925,21 @@ python run_benchmark.py --quick
 
 ## Citation
 
-If you use TriTopic in academic work, please cite the software and the methods it builds on.
+If you use GraphWeave in academic work, please cite the software and the methods it builds on.
 
 ### Software
+
+```bibtex
+@software{graphweave2026,
+  author    = {Mathew, Nevil},
+  title     = {GraphWeave: Multi-View Graph Topic Modeling with Iterative Refinement},
+  year      = {2026},
+  url       = {https://github.com/nevil-mathew/topic-extraction-poc}
+}
+```
+
+GraphWeave began as a derivative of `tritopic`; if you're citing the underlying method
+lineage rather than this specific codebase, consider also citing the original:
 
 ```bibtex
 @software{tritopic2025,
@@ -1928,20 +1997,93 @@ If you use TriTopic in academic work, please cite the software and the methods i
   year    = {2018},
   url     = {https://arxiv.org/abs/1802.03426}
 }
+
+@inproceedings{zhang2023clusterllm,
+  author    = {Zhang, Yuwei and Wang, Zihan and Shang, Jingbo},
+  title     = {{ClusterLLM}: Large Language Models as a Guide for Text Clustering},
+  booktitle = {Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  pages     = {13903--13920},
+  year      = {2023},
+  url       = {https://arxiv.org/abs/2305.14871},
+  note      = {Triplet-query approach underlying LLM-guided granularity calibration and embedding adaptation.}
+}
+
+@inproceedings{douglas2026prism,
+  author    = {Douglas, Connor and Balci, Utkucan and Aylett-Bullock, Joseph},
+  title     = {{PRISM}: LLM-Guided Semantic Clustering for High-Precision Topics},
+  booktitle = {Proceedings of the ACM Web Conference 2026 (WWW '26)},
+  pages     = {8701--8704},
+  year      = {2026},
+  doi       = {10.1145/3774904.3792944},
+  url       = {https://arxiv.org/abs/2604.03180},
+  note      = {Sampling/evaluation design underlying LLM-guided embedding adaptation.}
+}
+
+@article{viswanathan2024fewshot,
+  author  = {Viswanathan, Vijay and Gashteovski, Kiril and Lawrence, Carolin and Wu, Tongshuang and Neubig, Graham},
+  title   = {Large Language Models Enable Few-Shot Clustering},
+  journal = {Transactions of the Association for Computational Linguistics},
+  volume  = {12},
+  pages   = {321--333},
+  year    = {2024},
+  url     = {https://arxiv.org/abs/2307.00524},
+  note    = {Keyphrase expansion and low-confidence correction techniques.}
+}
+
+@article{mcinnes2017hdbscan,
+  author  = {McInnes, Leland and Healy, John and Astels, Steve},
+  title   = {hdbscan: Hierarchical density based clustering},
+  journal = {Journal of Open Source Software},
+  volume  = {2},
+  number  = {11},
+  pages   = {205},
+  year    = {2017},
+  doi     = {10.21105/joss.00205},
+  note    = {Basis for the min\_cluster\_size / min\_cluster\_fraction scale-invariance argument.}
+}
+
+@article{fortunato2007resolution,
+  author  = {Fortunato, Santo and Barthelemy, Marc},
+  title   = {Resolution limit in community detection},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume  = {104},
+  number  = {1},
+  pages   = {36--41},
+  year    = {2007},
+  doi     = {10.1073/pnas.0605965104},
+  note    = {Basis for the min\_cluster\_size / min\_cluster\_fraction scale-invariance argument.}
+}
 ```
+
+## Acknowledgments
+
+GraphWeave's starting codebase came from [`tritopic`](https://pypi.org/project/tritopic/), an
+MIT-licensed topic modeling library published to PyPI by **Roman Egger** (SmartVisions AI). The
+original GitHub repository ([SmartVisions-AI/tritopic](https://github.com/SmartVisions-AI/tritopic))
+didn't include browsable source, so the codebase here started from the published package.
+
+Since then, most core modules have been substantially rewritten (several have roughly doubled
+in size or more), and entire subsystems were added that don't exist upstream: cumulative /
+batch-wise streaming clustering, LLM-guided embedding adaptation, LLM-guided granularity
+calibration, quote verification for LLM-generated narratives, and the adaptive FAISS/HNSW kNN
+backend.
+
+The MIT License permits this kind of derivative work freely; it only requires that the original
+copyright notice be preserved. That notice — the full original license text plus a longer
+provenance note — lives in [`NOTICE.md`](NOTICE.md).
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details, and [NOTICE.md](NOTICE.md) for the
+inherited third-party notice from the original `tritopic` project.
 
 ## Contributing
 
-Contributions welcome! Please open an issue or pull request on [GitHub](https://github.com/SmartVisions-AI/tritopic).
+Contributions welcome! Please open an issue or pull request on [GitHub](https://github.com/nevil-mathew/topic-extraction-poc).
 
 ## Links
 
-- **Homepage:** [smartvisions.at](https://www.smartvisions.at)
-- **Documentation:** [Full technical docs](https://github.com/SmartVisions-AI/tritopic/blob/main/docs/docs.md)
-- **Repository:** [GitHub](https://github.com/SmartVisions-AI/tritopic)
-- **PyPI:** [tritopic](https://pypi.org/project/tritopic/)
-- **Issues:** [Bug reports & feature requests](https://github.com/SmartVisions-AI/tritopic/issues)
+- **Repository:** [GitHub](https://github.com/nevil-mathew/topic-extraction-poc)
+- **PyPI:** [graphweave](https://pypi.org/project/graphweave/)
+- **Issues:** [Bug reports & feature requests](https://github.com/nevil-mathew/topic-extraction-poc/issues)
+- **Prior work:** [tritopic on PyPI](https://pypi.org/project/tritopic/) / [SmartVisions-AI/tritopic on GitHub](https://github.com/SmartVisions-AI/tritopic)

@@ -1,10 +1,10 @@
-"""Basic tests for the TriTopic model fitting pipeline."""
+"""Basic tests for the GraphWeave model fitting pipeline."""
 
 import numpy as np
 import pandas as pd
 
-from tritopic import TriTopic
-from tritopic.core.hierarchy import TopicHierarchy
+from graphweave import GraphWeave
+from graphweave.core.hierarchy import TopicHierarchy
 
 
 class TestFitTransform:
