@@ -117,10 +117,12 @@ def sample_triplets_hard_margin(
 
     rng = np.random.default_rng(random_state + 1)
     jitter = rng.uniform(0, 1e-6, size=len(pool))
-    margins = [
-        float(np.dot(normed[a], normed[b]) - np.dot(normed[a], normed[c]))
-        for a, b, c in pool
-    ]
+    pool_arr = np.asarray(pool)  # (len(pool), 3): (anchor, same, diff) indices
+    a_idx, b_idx, c_idx = pool_arr[:, 0], pool_arr[:, 1], pool_arr[:, 2]
+    margins = (
+        np.sum(normed[a_idx] * normed[b_idx], axis=1)
+        - np.sum(normed[a_idx] * normed[c_idx], axis=1)
+    )
     order = sorted(range(len(pool)), key=lambda i: margins[i] + jitter[i])
     return [pool[i] for i in order[:n_triplets]]
 
@@ -289,8 +291,24 @@ class TripletBank:
         resolved: list[TripletJudgment | None] = [None] * len(triplets)
         uncached: list[int] = []
         for i, h in enumerate(content_hashes):
-            if h in cache_index:
-                resolved[i] = cache_index[h]
+            cached = cache_index.get(h)
+            if cached is not None:
+                # Rebind the cached answer to THIS run's triplet indices. The
+                # cache is keyed on document *content* (so it survives
+                # resampling/reordering), but the stored anchor/positive/
+                # negative are whatever indices existed when it was written —
+                # stale for the current (a, b, c). Reconstruct from raw_answer,
+                # the swap-independent canonical "B"/"C" (or None if unparsed).
+                a, b, c = triplets[i]
+                if cached.raw_answer == "C":
+                    positive, negative = c, b
+                else:  # "B" or None — mirror the live LLM-path default mapping
+                    positive, negative = b, c
+                resolved[i] = TripletJudgment(
+                    anchor=a, positive=positive, negative=negative,
+                    swapped=bool(swaps[i]), raw_answer=cached.raw_answer,
+                    split=_split_for_hash(h, self.random_state, holdout_frac),
+                )
                 self.n_cache_hits += 1
             else:
                 uncached.append(i)

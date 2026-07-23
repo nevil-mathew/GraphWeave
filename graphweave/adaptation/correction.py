@@ -11,6 +11,7 @@ stays inside the package's import boundary.
 from __future__ import annotations
 
 import json
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -116,9 +117,20 @@ def reassign_low_confidence(
             system_prompt, user_prompt = _build_correction_prompt(
                 model.documents_[doc_idx], candidates, n_docs_chars
             )
-            raw = labeler.call_structured(
-                system_prompt, user_prompt, schema=CORRECTION_SCHEMA, max_tokens=64
-            )
+            try:
+                raw = labeler.call_structured(
+                    system_prompt, user_prompt, schema=CORRECTION_SCHEMA, max_tokens=64
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad doc must not abort the whole run
+                # Timeouts / provider errors on a single document: skip it
+                # (leave its assignment untouched) rather than losing every
+                # correction made so far.
+                warnings.warn(
+                    f"reassign_low_confidence: LLM call failed for doc {int(doc_idx)} "
+                    f"({exc}); leaving its assignment unchanged.",
+                    stacklevel=2,
+                )
+                continue
             choice = _parse_choice(raw, len(candidates))
 
             old_topic = int(model.labels_[doc_idx])

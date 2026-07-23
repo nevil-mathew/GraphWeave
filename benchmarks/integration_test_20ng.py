@@ -303,7 +303,7 @@ def footer(t_total: float) -> None:
     print(f"  Total runtime    : {t_total/60:.1f} min")
     print(f"  Peak RAM         : {rss_mb():.0f} MB")
     print(f"  HNSW backend     : {hnsw_status}")
-    print(f"  Consensus        : default graph-consensus path (avoids 18k×18k matrix)")
+    print("  Consensus        : default graph-consensus path (avoids 18k×18k matrix)")
     print()
     print("  Interpretation:")
     print("  · Drift fires when new categories appear → recluster discovers new topics.")

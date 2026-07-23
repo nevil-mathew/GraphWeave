@@ -113,6 +113,7 @@ adaptation = [
     "datasets>=2.14.0",
     "accelerate>=0.26.0",
     "torch>=2.0.0",
+    "sentence-transformers>=3.0",
 ]
 # GPU acceleration extras
 # -------------------------
@@ -151,9 +152,9 @@ benchmark = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/nevil-mathew/topic-extraction-poc"
-Repository = "https://github.com/nevil-mathew/topic-extraction-poc"
-Issues = "https://github.com/nevil-mathew/topic-extraction-poc/issues"
+Homepage = "https://github.com/nevil-mathew/GraphWeave"
+Repository = "https://github.com/nevil-mathew/GraphWeave"
+Issues = "https://github.com/nevil-mathew/GraphWeave/issues"
 
 
 [tool.setuptools.packages.find]

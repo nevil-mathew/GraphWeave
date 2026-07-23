@@ -6,7 +6,7 @@
 
 **Multi-view graph topic modeling with consensus clustering and iterative refinement**
 
-[![CI](https://github.com/nevil-mathew/topic-extraction-poc/actions/workflows/ci.yml/badge.svg)](https://github.com/nevil-mathew/topic-extraction-poc/actions/workflows/ci.yml)
+[![CI](https://github.com/nevil-mathew/GraphWeave/actions/workflows/ci.yml/badge.svg)](https://github.com/nevil-mathew/GraphWeave/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/graphweave.svg)](https://pypi.org/project/graphweave/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
@@ -138,7 +138,7 @@ pip install graphweave
 # With LLM labeling support (Claude / GPT-4 / Gemini)
 pip install graphweave[llm]
 
-# With LLM-guided embedding fine-tuning (adds datasets, accelerate)
+# With LLM-guided embedding fine-tuning (adds torch, datasets, accelerate)
 pip install graphweave[adaptation]
 
 # Full installation (all optional features, including GPU support)
@@ -148,8 +148,8 @@ pip install graphweave[full]
 ### From source
 
 ```bash
-git clone https://github.com/nevil-mathew/topic-extraction-poc.git
-cd topic-extraction-poc
+git clone https://github.com/nevil-mathew/GraphWeave.git
+cd GraphWeave
 pip install -e ".[dev]"
 ```
 
@@ -560,13 +560,13 @@ The default `consensus_method="graph"` (Lancichinetti & Fortunato, *Consensus cl
 
 Quality is at least as good — the LF paper shows graph consensus improves stability and accuracy versus any single Leiden run. You do not need to do anything: the default is on automatically.
 
-> **Implementation note:** The co-occurrence matrix is accumulated in float32 (halving dtype overhead vs float64) and pruned after each Leiden run — entries that can no longer reach the τ threshold are dropped immediately, so the matrix stays sparse throughout rather than growing to its maximum at the final run. Parallel Leiden runs are capped at 4 concurrent threads regardless of `n_jobs`, preventing 10× peak C-level allocations from all runs landing in memory simultaneously.
+> **Implementation note:** The co-occurrence matrix is accumulated in int16 (counts never exceed `n_runs` ≤ 32k, so 2 bytes suffice vs float32's 4 bytes) and pruned after each Leiden run — entries that can no longer reach the τ threshold are dropped immediately, so the matrix stays sparse throughout rather than growing to its maximum at the final run. Parallel Leiden runs are capped at 4 concurrent threads regardless of `n_jobs`, preventing 10× peak C-level allocations from all runs landing in memory simultaneously.
 
 ### When to touch the knobs
 
 | Situation | What to do |
 |---|---|
-| Any size, default install | **Nothing.** The default is already memory-safe with automatic float32, early pruning, and capped parallelism. |
+| Any size, default install | **Nothing.** The default is already memory-safe with automatic int16, early pruning, and capped parallelism. |
 | You want stricter / looser consensus | Tune `consensus_threshold_tau` in `[0.3, 0.8]`. Higher τ = stricter (fewer, tighter topics). |
 | You want bit-for-bit identical results to the legacy hierarchical path | Set `consensus_method="hierarchical"`. See below. |
 | You still hit an OOM crash | Lower `n_consensus_runs` (e.g. 5) or raise `consensus_threshold_tau` (e.g. 0.7, more aggressive pruning). |
@@ -732,7 +732,7 @@ You can ignore the warning and use the resulting model normally.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Crash at `Iteration 1...` with no traceback | Out of memory in consensus step | Lower `n_consensus_runs` (e.g. 5) or `consensus_threshold_tau` (e.g. 0.3); `low_memory=True` only helps the legacy `hierarchical` path |
+| Crash at `Iteration 1...` with no traceback | Out of memory in consensus step | Lower `n_consensus_runs` (e.g. 5) or raise `consensus_threshold_tau` (e.g. 0.7); `low_memory=True` only helps the legacy `hierarchical` path |
 | `ImportError: cannot import name '...' from 'transformers'` in Colab | Colab silently upgraded torch/transformers mid-session | **Runtime -> Restart session**, then rerun |
 | Too many tiny topics | `resolution` too high or `min_cluster_size` too low | Lower `resolution` (e.g. 0.8) or set `min_cluster_fraction=0.005` (scales with corpus size) |
 | `ValueError: Found array with 0 sample(s)` in `transform()` | `min_cluster_size` too large — all Leiden communities filtered to outliers | Lower `min_cluster_size`, or switch to `min_cluster_fraction=0.005` |
@@ -1207,7 +1207,7 @@ print(model.adaptation_diagnostics_["holdout_triplet_acc_after"])
 | Mode | Requires | Works with |
 |---|---|---|
 | `"linear"` | numpy only | any embedder, including API-based ones (Gemini) — the practical default on CPU-only machines |
-| `"finetune"` | `pip install "graphweave[adaptation]"` (adds `datasets`, `accelerate`) | local sentence-transformers models only |
+| `"finetune"` | `pip install "graphweave[adaptation]"` (adds `torch`, `datasets`, `accelerate`) | local sentence-transformers models only |
 | `"auto"` (default) | — | picks `"finetune"` when possible, else `"linear"` with a warning |
 
 `"linear"` trains an identity-initialized d×d matrix on top of frozen embeddings with a cosine hinge triplet loss, shrunk toward the identity by an L2 penalty so noisy LLM judgments can't push it far from the base geometry — cheap, CPU-friendly, and the only option for embedders you can't fine-tune. `"finetune"` runs a real 1-epoch, low-LR sentence-transformers fine-tune (`MultipleNegativesRankingLoss` by default) — the full ClusterLLM recipe.
@@ -1934,7 +1934,7 @@ If you use GraphWeave in academic work, please cite the software and the methods
   author    = {Mathew, Nevil},
   title     = {GraphWeave: Multi-View Graph Topic Modeling with Iterative Refinement},
   year      = {2026},
-  url       = {https://github.com/nevil-mathew/topic-extraction-poc}
+  url       = {https://github.com/nevil-mathew/GraphWeave}
 }
 ```
 
@@ -2079,11 +2079,11 @@ inherited third-party notice from the original `tritopic` project.
 
 ## Contributing
 
-Contributions welcome! Please open an issue or pull request on [GitHub](https://github.com/nevil-mathew/topic-extraction-poc).
+Contributions welcome! Please open an issue or pull request on [GitHub](https://github.com/nevil-mathew/GraphWeave).
 
 ## Links
 
-- **Repository:** [GitHub](https://github.com/nevil-mathew/topic-extraction-poc)
+- **Repository:** [GitHub](https://github.com/nevil-mathew/GraphWeave)
 - **PyPI:** [graphweave](https://pypi.org/project/graphweave/)
-- **Issues:** [Bug reports & feature requests](https://github.com/nevil-mathew/topic-extraction-poc/issues)
+- **Issues:** [Bug reports & feature requests](https://github.com/nevil-mathew/GraphWeave/issues)
 - **Prior work:** [tritopic on PyPI](https://pypi.org/project/tritopic/) / [SmartVisions-AI/tritopic on GitHub](https://github.com/SmartVisions-AI/tritopic)

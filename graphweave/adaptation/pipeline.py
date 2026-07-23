@@ -19,6 +19,8 @@ from .config import AdaptationConfig
 from .evaluation import compare_embedders, forgetting_check, triplet_accuracy
 
 if TYPE_CHECKING:
+    import pandas as pd
+
     from graphweave.core.model import GraphWeave
 
 
@@ -28,6 +30,7 @@ def adapt_and_refit(
     config: AdaptationConfig | None = None,
     evaluate: bool = True,
     labels_true=None,
+    metadata: "pd.DataFrame | None" = None,
 ) -> tuple["GraphWeave", dict]:
     """Adapt *model*'s embedder to LLM triplet judgments and refit a **new**
     GraphWeave model with the adapted embeddings.
@@ -53,6 +56,11 @@ def adapt_and_refit(
         never available for real unsupervised use). Passed straight through
         to the internal :func:`compare_embedders` call so ``report["comparison"]``
         gets ARI/NMI/cluster-accuracy columns; has no other effect.
+    metadata : pd.DataFrame, optional
+        The same fit-time metadata *model* was originally fit with. Required
+        when ``model.config.use_metadata_view`` is True — it is not persisted
+        on the model, so the refit can't reconstruct the metadata view
+        without it.
 
     Returns
     -------
@@ -84,13 +92,25 @@ def adapt_and_refit(
     probabilities = getattr(model, "probabilities_", None)
 
     is_local = model.config.embedding_provider == "local"
-    base_encoder = EmbeddingEngine(
-        model_name=model.config.embedding_model,
-        batch_size=model.config.embedding_batch_size,
-        provider=model.config.embedding_provider,
-        api_key=model.config.embedding_api_key,
-        verbose=False,
-    )
+    # Reuse the model's own engine so the baseline/adapted embeddings are
+    # produced in the exact same space the model was fit in. Rebuilding it
+    # from a subset of config fields (as before) silently dropped
+    # api_batch_size/output_dim/task_type/batch_delay/prefix, which for API
+    # providers can change the output dimensionality or embedding space.
+    base_encoder = getattr(model, "_embedding_engine", None)
+    if base_encoder is None:
+        base_encoder = EmbeddingEngine(
+            model_name=model.config.embedding_model,
+            batch_size=model.config.embedding_batch_size,
+            provider=model.config.embedding_provider,
+            api_key=model.config.embedding_api_key,
+            api_batch_size=model.config.embedding_api_batch_size,
+            output_dim=model.config.embedding_output_dim,
+            task_type=model.config.embedding_task_type,
+            batch_delay=model.config.embedding_batch_delay,
+            prefix=model.config.embedding_prefix,
+            verbose=False,
+        )
 
     adapter = EmbeddingAdapter(
         labeler=labeler,
@@ -98,6 +118,7 @@ def adapt_and_refit(
         base_model_name=model.config.embedding_model,
         is_local=is_local,
         config=config,
+        embedding_prefix=model.config.embedding_prefix,
     )
 
     bank = adapter.collect_triplets(
@@ -121,20 +142,24 @@ def adapt_and_refit(
             "embeddings may not be better for this corpus — check n_triplets, "
             "epochs, and LLM judgment quality before trusting them.",
             UserWarning,
+            stacklevel=2,
         )
 
-    if model.config.use_metadata_view:
-        warnings.warn(
+    if model.config.use_metadata_view and metadata is None:
+        raise ValueError(
             "adapt_and_refit: the original model used use_metadata_view=True, but "
-            "the fit-time metadata DataFrame is not persisted on the model, so the "
-            "refit model is fit WITHOUT the metadata view. Pass the same metadata "
-            "to the refit call yourself if you need it preserved.",
-            UserWarning,
+            "the fit-time metadata DataFrame is not persisted on the model, so it "
+            "can't be reconstructed automatically. Pass the same metadata used for "
+            "the original fit() call via the metadata= argument to preserve the "
+            "metadata view on refit."
         )
 
     new_model = GraphWeave(n_topics=model.n_topics, config=copy.deepcopy(model.config))
     new_model.fit(
-        documents, embeddings=new_embeddings, sample_weights=getattr(model, "sample_weights_", None)
+        documents,
+        embeddings=new_embeddings,
+        metadata=metadata,
+        sample_weights=getattr(model, "sample_weights_", None),
     )
 
     report: dict = {
@@ -153,7 +178,7 @@ def adapt_and_refit(
         try:
             report["forgetting"] = forgetting_check(base_encoder.encode, adapter.encode)
         except Exception as e:  # best-effort regression guard; never fail the pipeline on it
-            warnings.warn(f"forgetting_check failed: {e}", UserWarning)
+            warnings.warn(f"forgetting_check failed: {e}", UserWarning, stacklevel=2)
 
     if evaluate:
         report["comparison"] = compare_embedders(

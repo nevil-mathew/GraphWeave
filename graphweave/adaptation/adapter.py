@@ -157,12 +157,14 @@ class EmbeddingAdapter:
         base_model_name: str = "all-MiniLM-L6-v2",
         is_local: bool = True,
         config: AdaptationConfig | None = None,
+        embedding_prefix: str | None = None,
     ):
         self.labeler = labeler
         self.base_encoder = base_encoder
         self.base_model_name = base_model_name
         self.is_local = is_local
         self.config = config or AdaptationConfig()
+        self.embedding_prefix = embedding_prefix
 
         self.mode_: str | None = None
         self.model_ = None
@@ -231,6 +233,7 @@ class EmbeddingAdapter:
                 f"Falling back to linear adapter mode ({dep_error}). For real fine-tuning "
                 'install with: pip install "graphweave[adaptation]"',
                 UserWarning,
+                stacklevel=2,
             )
             return "linear"
         return "finetune"
@@ -268,18 +271,18 @@ class EmbeddingAdapter:
     def _finetune_sentence_transformer(self, documents: list[str], bank: TripletBank) -> None:
         try:
             import datasets
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 'Fine-tuning requires the "datasets" package. '
                 'Install with: pip install "graphweave[adaptation]"'
-            )
+            ) from e
         try:
             import accelerate  # noqa: F401
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 'Fine-tuning requires the "accelerate" package. '
                 'Install with: pip install "graphweave[adaptation]"'
-            )
+            ) from e
 
         from sentence_transformers import SentenceTransformer
 
@@ -312,11 +315,17 @@ class EmbeddingAdapter:
                     "freeze_layers was set but no matching parameter names were "
                     "found — no layers were frozen.",
                     UserWarning,
+                    stacklevel=2,
                 )
 
         train_texts = bank.to_training_texts(documents)
         if not train_texts["anchor"]:
             raise ValueError("No training triplets available (bank.train is empty).")
+        if self.embedding_prefix:
+            train_texts = {
+                key: [self.embedding_prefix + text for text in texts]
+                for key, texts in train_texts.items()
+            }
         train_dataset = datasets.Dataset.from_dict(train_texts)
 
         loss = (
@@ -347,6 +356,8 @@ class EmbeddingAdapter:
         if self.mode_ is None:
             raise ValueError("EmbeddingAdapter not fitted — call finetune() first.")
         if self.mode_ == "finetune":
+            if self.embedding_prefix:
+                documents = [self.embedding_prefix + doc for doc in documents]
             return self.model_.encode(
                 documents, batch_size=32, normalize_embeddings=normalize, convert_to_numpy=True
             )

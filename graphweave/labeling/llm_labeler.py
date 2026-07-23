@@ -101,6 +101,11 @@ class LLMLabeler:
         Print each label as it is generated. Default: False
     """
 
+    # Populated at runtime: OpenRouter model names that rejected
+    # extra_body={"reasoning": {"enabled": False}} once, so later calls to
+    # the same model skip the doomed attempt instead of paying for it again.
+    _reasoning_unsupported_models: set = set()
+
     def __init__(
         self,
         provider: Literal["anthropic", "openai", "google", "openrouter"] = "anthropic",
@@ -547,9 +552,23 @@ Respond ONLY with this exact JSON format, no other text:
             # surfacing as an empty completion with finish_reason="length" (the same
             # problem _call_google avoids below via thinking_config). OpenRouter's unified
             # "reasoning" field disables that for models that support toggling it; models
-            # that don't support disabling it just ignore the field.
-            kwargs["extra_body"] = {"reasoning": {"enabled": False}}
-        response = self._client.chat.completions.create(**kwargs)
+            # that don't support disabling it just ignore the field. A minority of
+            # mandatory-reasoning models reject the field outright instead of ignoring
+            # it — the first such rejection is remembered in
+            # _reasoning_unsupported_models so later calls to that model skip the
+            # doomed attempt instead of paying for a retry every time.
+            if self.model in self._reasoning_unsupported_models:
+                response = self._client.chat.completions.create(**kwargs)
+            else:
+                kwargs["extra_body"] = {"reasoning": {"enabled": False}}
+                try:
+                    response = self._client.chat.completions.create(**kwargs)
+                except Exception:
+                    self._reasoning_unsupported_models.add(self.model)
+                    del kwargs["extra_body"]
+                    response = self._client.chat.completions.create(**kwargs)
+        else:
+            response = self._client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
         if content is None:
             finish_reason = response.choices[0].finish_reason

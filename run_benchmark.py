@@ -210,6 +210,20 @@ def run_bertopic(docs: list[str], embeddings: np.ndarray, k: int, seed: int):
     )
     labels, _ = topic_model.fit_transform(docs, embeddings=embeddings)
     labels = np.asarray(labels)
+
+    # nr_topics only *merges* the clusters HDBSCAN found — it can never split
+    # to reach a higher target, so BERTopic often realizes fewer than k topics
+    # while GraphWeave/NMF/LDA hit exactly k. Surface that so the comparison
+    # isn't silently read as like-for-like at the requested k.
+    n_realized = len({t for t in topic_model.topics_ if t != -1})
+    if n_realized < k:
+        warnings.warn(
+            f"BERTopic realized only {n_realized} topics for requested k={k} "
+            f"(nr_topics merges existing HDBSCAN clusters and cannot reach a higher "
+            f"target). This row compares against fewer topics than the other models; "
+            f"tune min_cluster_size / UMAP settings if you need it to reach k."
+        )
+
     keywords = [
         [w for w, _ in topic_model.get_topic(tid)][:10]
         for tid in sorted(set(labels.tolist()))

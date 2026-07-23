@@ -157,7 +157,7 @@ class GraphWeaveConfig:
     # _compute_consensus never builds the dense matrix in the first place, so
     # this flag is read but has no effect.  When True on the hierarchical
     # path, _compute_consensus builds the condensed distance directly from
-    # the sparse co-occurrence (float32) instead of materializing the N×N
+    # the sparse co-occurrence (float32) instead of materializing the N x N
     # dense matrix, and _fit_iterative caches the lexical graph across
     # iterations.  Output is numerically equivalent to the dense hierarchical
     # path; enable for large-N OOM avoidance if you need consensus_method="hierarchical".
@@ -1938,6 +1938,7 @@ class GraphWeave:
         self,
         labeler,
         config: AdaptationConfig | None = None,
+        metadata: pd.DataFrame | None = None,
     ) -> "GraphWeave":
         """Adapt this model's embedder to LLM-judged triplet preferences and
         refit in place with the adapted embeddings.
@@ -1964,6 +1965,11 @@ class GraphWeave:
         config : AdaptationConfig, optional
             Triplet budget, sampling strategy, fine-tune/linear
             hyperparameters, etc. Defaults to ``AdaptationConfig()``.
+        metadata : pd.DataFrame, optional
+            The same metadata this model was originally fit with. Required
+            when ``self.config.use_metadata_view`` is True — it is not
+            persisted on the model, so it must be passed again here to
+            preserve the metadata view on refit.
 
         Returns
         -------
@@ -1987,7 +1993,9 @@ class GraphWeave:
 
         from graphweave.adaptation.pipeline import adapt_and_refit
 
-        new_model, report = adapt_and_refit(self, labeler, config=config, evaluate=False)
+        new_model, report = adapt_and_refit(
+            self, labeler, config=config, evaluate=False, metadata=metadata
+        )
 
         if self.config.verbose:
             print(
@@ -2442,10 +2450,16 @@ OUTPUT FORMAT (JSON, no other text):
             )
         members_block = "\n".join(summaries)
 
-        # Docs block
+        # Docs block. Keep the exact truncated strings shown to the LLM so
+        # quote verification checks against what the model could actually
+        # have quoted — verifying against the full untruncated doc_texts
+        # would "confirm" a fabricated quote that happens to match text past
+        # the 1200-char cutoff the LLM never saw.
         docs_text = ""
+        displayed_docs: list[str] = []
         for i, doc in enumerate(doc_texts, 1):
             truncated = doc[:1200] + "..." if len(doc) > 1200 else doc
+            displayed_docs.append(truncated)
             docs_text += f"\nDocument {i}: {truncated}\n"
 
         hint = labeler.domain_hint or ""
@@ -2494,13 +2508,14 @@ Respond ONLY with this exact JSON, no other text:
         raw = labeler.call_raw(system_prompt, user_prompt, max_tokens=1200)
         narrative = self._parse_narrative_response(raw)
 
-        unverified_quotes = verify_quotes(narrative, doc_texts)
+        unverified_quotes = verify_quotes(narrative, displayed_docs)
         if unverified_quotes:
             warnings.warn(
                 f"Meta-theme '{proposal['title']}' (theme_id={theme_id}) contains "
                 f"{len(unverified_quotes)} quoted phrase(s) not found verbatim in the "
                 f"source documents shown to the LLM: {unverified_quotes}. Review before "
-                f"publishing — the LLM may have paraphrased or fabricated the quote."
+                f"publishing — the LLM may have paraphrased or fabricated the quote.",
+                stacklevel=2,
             )
 
         return ReportTheme(
