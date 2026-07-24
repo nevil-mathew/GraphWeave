@@ -1,6 +1,6 @@
-"""Tests for tritopic.utils.stopwords."""
+"""Tests for graphweave.utils.stopwords."""
 
-from tritopic.utils.stopwords import get_stopwords, get_stopwords_set
+from graphweave.utils.stopwords import get_stopwords, get_stopwords_set
 
 
 class TestGetStopwords:

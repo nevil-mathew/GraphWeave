@@ -1,8 +1,8 @@
-"""Tests for the optional LLM-based topic-alignment layer (tritopic.cumulative).
+"""Tests for the optional LLM-based topic-alignment layer (graphweave.cumulative).
 
 No real API is ever called: a fake labeler exposing only ``call_raw`` stands in
-for :class:`~tritopic.labeling.llm_labeler.LLMLabeler`. Unit tests exercise
-``llm_align_topics`` directly; integration tests drive ``CumulativeTriTopic`` with
+for :class:`~graphweave.labeling.llm_labeler.LLMLabeler`. Unit tests exercise
+``llm_align_topics`` directly; integration tests drive ``CumulativeGraphWeave`` with
 the fake labeler on the config (precomputed blob embeddings, no model download).
 """
 
@@ -12,9 +12,9 @@ import re
 import numpy as np
 import pytest
 
-from tritopic import TriTopicConfig
-from tritopic.cumulative import CumulativeConfig, CumulativeTriTopic
-from tritopic.cumulative.alignment import (
+from graphweave import GraphWeaveConfig
+from graphweave.cumulative import CumulativeConfig, CumulativeGraphWeave
+from graphweave.cumulative.alignment import (
     align_topics,
     llm_align_topics,
     _parse_alignment_response,
@@ -210,7 +210,7 @@ class TestParseAlignmentResponse:
 
 
 # --------------------------------------------------------------------------- #
-# Integration tests: CumulativeTriTopic with a fake labeler on the config
+# Integration tests: CumulativeGraphWeave with a fake labeler on the config
 # --------------------------------------------------------------------------- #
 class TestLlmAlignmentIntegration:
     def _cfg(self, light_config, **kw):
@@ -225,7 +225,7 @@ class TestLlmAlignmentIntegration:
         # Every new topic is marked new_theme -> epoch-2 ids must be disjoint from
         # epoch-1 ids (cosine would have REUSED them on identical data).
         labeler = RowEchoLabeler(decision="new_theme")
-        cum = CumulativeTriTopic(self._cfg(light_config, align_method="llm", align_labeler=labeler))
+        cum = CumulativeGraphWeave(self._cfg(light_config, align_method="llm", align_labeler=labeler))
         docs, embs, _ = make_dataset([0, 1, 2, 3], seed=7)
 
         cum.add_batch(docs, embeddings=embs)          # epoch 1: registry empty, no LLM call
@@ -242,7 +242,7 @@ class TestLlmAlignmentIntegration:
         # Identical data => cosine matches every topic strongly (sim >= high), so
         # the ambiguous band is empty and the LLM is never consulted; ids stay stable.
         labeler = RowEchoLabeler(decision="new_theme")
-        cum = CumulativeTriTopic(self._cfg(light_config, align_method="both", align_labeler=labeler))
+        cum = CumulativeGraphWeave(self._cfg(light_config, align_method="both", align_labeler=labeler))
         docs, embs, _ = make_dataset([0, 1, 2, 3], seed=7)
         cum.add_batch(docs, embeddings=embs)
         ids1 = {int(x) for x in cum.labels_ if x != -1}
@@ -253,7 +253,7 @@ class TestLlmAlignmentIntegration:
         assert ids1 == ids2                           # cosine kept the stable ids
 
     def test_missing_labeler_falls_back_to_cosine(self, light_config):
-        cum = CumulativeTriTopic(self._cfg(light_config, align_method="llm", align_labeler=None))
+        cum = CumulativeGraphWeave(self._cfg(light_config, align_method="llm", align_labeler=None))
         docs, embs, _ = make_dataset([0, 1, 2, 3], seed=7)
         cum.add_batch(docs, embeddings=embs)
         ids1 = {int(x) for x in cum.labels_ if x != -1}
@@ -264,7 +264,7 @@ class TestLlmAlignmentIntegration:
 
     def test_registry_summaries_populated_and_keyed(self, light_config):
         labeler = RowEchoLabeler(decision="new_theme")
-        cum = CumulativeTriTopic(self._cfg(light_config, align_method="llm", align_labeler=labeler))
+        cum = CumulativeGraphWeave(self._cfg(light_config, align_method="llm", align_labeler=labeler))
         docs, embs, _ = make_dataset([0, 1, 2, 3], seed=7)
         cum.add_batch(docs, embeddings=embs)
 
@@ -276,7 +276,7 @@ class TestLlmAlignmentIntegration:
 
     def test_align_disabled_is_identity_regardless_of_method(self, light_config):
         labeler = RowEchoLabeler(decision="new_theme")
-        cum = CumulativeTriTopic(
+        cum = CumulativeGraphWeave(
             self._cfg(light_config, align_topics=False, align_method="llm", align_labeler=labeler)
         )
         docs, embs, _ = make_dataset([0, 1], seed=1)

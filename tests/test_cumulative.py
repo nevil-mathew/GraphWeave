@@ -1,7 +1,7 @@
-"""Tests for cumulative / batch-wise clustering (tritopic.cumulative).
+"""Tests for cumulative / batch-wise clustering (graphweave.cumulative).
 
 Self-contained: synthetic blob embeddings are passed in precomputed, so these
-tests never download an embedding model. A lightweight TriTopicConfig keeps the
+tests never download an embedding model. A lightweight GraphWeaveConfig keeps the
 reused full-batch fit() fast (no UMAP, no iterative refinement, no lexical view).
 """
 
@@ -12,11 +12,11 @@ import pandas as pd
 import pytest
 from sklearn.metrics import adjusted_rand_score
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.core.hierarchy import TopicHierarchy
-from tritopic.cumulative import CumulativeConfig, CumulativeTriTopic
-from tritopic.cumulative.strategies import STRATEGY_NAMES
-from tritopic.cumulative.evaluation import benchmark_strategies, compare_to_full_batch
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.core.hierarchy import TopicHierarchy
+from graphweave.cumulative import CumulativeConfig, CumulativeGraphWeave
+from graphweave.cumulative.strategies import STRATEGY_NAMES
+from graphweave.cumulative.evaluation import benchmark_strategies, compare_to_full_batch
 
 
 # --------------------------------------------------------------------------- #
@@ -48,7 +48,7 @@ def make_dataset(topic_ids, per_topic=20, noise=0.05, seed=0):
 @pytest.fixture
 def light_config():
     """Lightweight full-batch config reused by the cumulative model."""
-    return TriTopicConfig(
+    return GraphWeaveConfig(
         use_dim_reduction=False,
         use_iterative_refinement=False,
         use_lexical_view=False,
@@ -64,7 +64,7 @@ def light_config():
 class TestAddBatch:
     def test_first_batch_reclusters(self, light_config):
         docs, embs, _ = make_dataset([0, 1], seed=1)
-        cum = CumulativeTriTopic(CumulativeConfig(base_config=light_config))
+        cum = CumulativeGraphWeave(CumulativeConfig(base_config=light_config))
         res = cum.add_batch(docs, embeddings=embs)
 
         assert res.reclustered is True
@@ -77,7 +77,7 @@ class TestAddBatch:
 
     def test_second_batch_assigned_without_recluster(self, light_config):
         cfg = CumulativeConfig(base_config=light_config, recluster_trigger="manual")
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         d1, e1, _ = make_dataset([0, 1], seed=1)
         cum.add_batch(d1, embeddings=e1)
 
@@ -96,7 +96,7 @@ class TestRecluster:
         cfg = CumulativeConfig(
             base_config=light_config, strategy=strategy, recluster_trigger="manual"
         )
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         d1, e1, _ = make_dataset([0, 1], seed=1)
         d2, e2, _ = make_dataset([2, 3], seed=2)
         cum.add_batch(d1, embeddings=e1)   # epoch 1 (first always reclusters)
@@ -117,7 +117,7 @@ class TestTopicAlignment:
             recluster_trigger="manual",
             align_topics=True,
         )
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         docs, embs, _ = make_dataset([0, 1, 2, 3], seed=7)
         cum.add_batch(docs, embeddings=embs)      # epoch 1
         ids1 = set(int(x) for x in cum.labels_)
@@ -131,7 +131,7 @@ class TestTopicAlignment:
         cfg = CumulativeConfig(
             base_config=light_config, strategy="global_refit", recluster_trigger="manual"
         )
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         d1, e1, _ = make_dataset([0, 1], seed=1)
         cum.add_batch(d1, embeddings=e1)
         n_after_two = cum.n_global_topics
@@ -149,7 +149,7 @@ class TestDriftTrigger:
         cfg = CumulativeConfig(
             base_config=light_config, recluster_trigger="drift", novelty_threshold=0.3
         )
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         d1, e1, _ = make_dataset([0, 1], seed=1)
         cum.add_batch(d1, embeddings=e1)
 
@@ -162,7 +162,7 @@ class TestDriftTrigger:
         cfg = CumulativeConfig(
             base_config=light_config, recluster_trigger="drift", novelty_threshold=0.3
         )
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         d1, e1, _ = make_dataset([0, 1], seed=1)
         cum.add_batch(d1, embeddings=e1)
 
@@ -173,7 +173,7 @@ class TestDriftTrigger:
 
     def test_manual_never_auto_fires(self, light_config):
         cfg = CumulativeConfig(base_config=light_config, recluster_trigger="manual")
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         d1, e1, _ = make_dataset([0, 1], seed=1)
         cum.add_batch(d1, embeddings=e1)
         d2, e2, _ = make_dataset([2, 3], seed=3)
@@ -189,7 +189,7 @@ class TestRegimeSwitch:
             strategy="global_refit",
             max_inmemory_docs=30,
         )
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         docs, embs, _ = make_dataset([0, 1, 2, 3], per_topic=20, seed=1)  # 80 docs
         cum.add_batch(docs, embeddings=embs)
 
@@ -201,7 +201,7 @@ class TestRegimeSwitch:
 class TestBiggerPicture:
     def test_hierarchy_built(self, light_config):
         cfg = CumulativeConfig(base_config=light_config, strategy="global_refit")
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         docs, embs, _ = make_dataset([0, 1, 2, 3], seed=1)
         cum.add_batch(docs, embeddings=embs)
 
@@ -212,7 +212,7 @@ class TestBiggerPicture:
 
     def test_get_topic_info_has_global_column(self, light_config):
         cfg = CumulativeConfig(base_config=light_config, strategy="global_refit")
-        cum = CumulativeTriTopic(cfg)
+        cum = CumulativeGraphWeave(cfg)
         docs, embs, _ = make_dataset([0, 1, 2, 3], seed=1)
         cum.add_batch(docs, embeddings=embs)
 
@@ -227,10 +227,10 @@ class TestReuseAndRegression:
         proving fit() is reused unchanged and the orchestration is faithful."""
         docs, embs, _ = make_dataset([0, 1, 2, 3], seed=7)
 
-        full = TriTopic(config=copy.deepcopy(light_config))
+        full = GraphWeave(config=copy.deepcopy(light_config))
         full.fit(docs, embeddings=embs)
 
-        cum = CumulativeTriTopic(
+        cum = CumulativeGraphWeave(
             CumulativeConfig(base_config=light_config, strategy="global_refit")
         )
         cum.add_batch(docs, embeddings=embs)
@@ -239,10 +239,10 @@ class TestReuseAndRegression:
         assert adjusted_rand_score(full.labels_, cum.labels_) >= 0.99
 
     def test_importing_cumulative_does_not_break_fit(self, light_config):
-        import tritopic.cumulative  # noqa: F401
+        import graphweave.cumulative  # noqa: F401
 
         docs, embs, _ = make_dataset([0, 1], seed=1)
-        model = TriTopic(config=copy.deepcopy(light_config))
+        model = GraphWeave(config=copy.deepcopy(light_config))
         labels = model.fit_transform(docs, embeddings=embs)
         assert len(labels) == len(docs)
 

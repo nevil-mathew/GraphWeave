@@ -5,7 +5,7 @@ import tempfile
 
 import numpy as np
 
-from tritopic import TriTopic, TriTopicConfig
+from graphweave import GraphWeave, GraphWeaveConfig
 
 
 class TestSaveLoadRoundtrip:
@@ -14,7 +14,7 @@ class TestSaveLoadRoundtrip:
             path = f.name
         try:
             fitted_model.save(path)
-            loaded = TriTopic.load(path)
+            loaded = GraphWeave.load(path)
             np.testing.assert_array_equal(loaded.labels_, fitted_model.labels_)
         finally:
             os.remove(path)
@@ -24,7 +24,7 @@ class TestSaveLoadRoundtrip:
             path = f.name
         try:
             fitted_model.save(path)
-            loaded = TriTopic.load(path)
+            loaded = GraphWeave.load(path)
             assert len(loaded.topics_) == len(fitted_model.topics_)
             for orig, load in zip(fitted_model.topics_, loaded.topics_):
                 assert orig.topic_id == load.topic_id
@@ -38,7 +38,7 @@ class TestSaveLoadRoundtrip:
             path = f.name
         try:
             fitted_model.save(path)
-            loaded = TriTopic.load(path)
+            loaded = GraphWeave.load(path)
             assert loaded.hierarchy_ is not None
             assert loaded.hierarchy_.n_levels == fitted_model.hierarchy_.n_levels
         finally:
@@ -49,7 +49,7 @@ class TestSaveLoadRoundtrip:
             path = f.name
         try:
             fitted_model.save(path)
-            loaded = TriTopic.load(path)
+            loaded = GraphWeave.load(path)
             assert loaded._is_fitted is True
         finally:
             os.remove(path)
@@ -58,7 +58,7 @@ class TestSaveLoadRoundtrip:
 class TestBackwardCompat:
     def test_config_defaults_on_missing_language(self):
         """Simulate loading a config saved before the language field existed."""
-        config = TriTopicConfig()
+        config = GraphWeaveConfig()
         # Remove the attribute to simulate an old pickle
         if hasattr(config, "language"):
             delattr(config, "language")
@@ -69,7 +69,7 @@ class TestBackwardCompat:
         assert config.language == "english"
 
     def test_config_defaults_on_missing_soft_assignment(self):
-        config = TriTopicConfig()
+        config = GraphWeaveConfig()
         if hasattr(config, "soft_assignment_method"):
             delattr(config, "soft_assignment_method")
 

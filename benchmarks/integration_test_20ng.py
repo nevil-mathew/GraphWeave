@@ -27,10 +27,10 @@ import psutil
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.cumulative import CumulativeConfig, CumulativeTriTopic
-from tritopic.cumulative.evaluation import benchmark_strategies, compare_to_full_batch
-from tritopic.utils.metrics import compute_ari, compute_nmi
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.cumulative import CumulativeConfig, CumulativeGraphWeave
+from graphweave.cumulative.evaluation import benchmark_strategies, compare_to_full_batch
+from graphweave.utils.metrics import compute_ari, compute_nmi
 
 CACHE_DIR = Path(__file__).parent / ".cache"
 CACHE_DIR.mkdir(exist_ok=True)
@@ -70,7 +70,7 @@ def _embed_sentence_transformers(documents: list[str]) -> np.ndarray:
 
 
 def _embed_lsa(documents: list[str]) -> np.ndarray:
-    from tritopic.cumulative.datasets import lsa_embed
+    from graphweave.cumulative.datasets import lsa_embed
     print("  Using LSA fallback (TF-IDF + TruncatedSVD, 128-dim)...")
     return lsa_embed(documents, dim=128)
 
@@ -154,14 +154,15 @@ def make_batches(
     return batch_docs, batch_emb, batch_lbl
 
 
-def base_cfg() -> TriTopicConfig:
-    return TriTopicConfig(
+def base_cfg() -> GraphWeaveConfig:
+    return GraphWeaveConfig(
         use_dim_reduction=False,         # MiniLM 384-dim already dense; UMAP adds minutes
         use_lexical_view=True,           # real text benefits strongly from TF-IDF graph
         use_iterative_refinement=False,  # 3× speedup; marginal loss at this scale
         n_consensus_runs=5,
         min_cluster_size=15,             # appropriate for ~3k-doc batches
-        low_memory=True,                 # CRITICAL: avoids 18k×18k matrix (~2.7 GB)
+        # consensus_method left at default "graph": avoids the 18k×18k dense
+        # matrix entirely (low_memory has no effect on this path, so it's omitted).
         n_neighbors=15,
         random_state=42,
         verbose=False,
@@ -174,7 +175,7 @@ def scenario_drift(
     batch_docs: list[list[str]],
     batch_emb: list[np.ndarray],
     batch_lbl: list[np.ndarray],
-) -> CumulativeTriTopic:
+) -> CumulativeGraphWeave:
     hr("SCENARIO A — Drift detection on real 20 Newsgroups text")
     print("Batches 1-4: categories 0-14 only.  "
           "Batches 5-6: all 20 categories (5 new themes emerge).\n")
@@ -185,7 +186,7 @@ def scenario_drift(
         recluster_trigger="drift",
         novelty_threshold=0.20,
     )
-    model = CumulativeTriTopic(cfg)
+    model = CumulativeGraphWeave(cfg)
 
     print(f"  {'batch':>5} | {'docs':>6} | {'cumul':>6} | {'novelty':>7} | "
           f"{'reclust':>7} | {'g-topics':>8} | {'ARI/truth':>9} | {'RAM MB':>6} | {'wall_s':>6}")
@@ -209,7 +210,7 @@ def scenario_drift(
     # Final metrics vs the full-batch baseline
     print("  Computing full-batch baseline (fit once on ALL accumulated docs)...")
     t0 = time.perf_counter()
-    full = TriTopic(config=copy.deepcopy(base_cfg()))
+    full = GraphWeave(config=copy.deepcopy(base_cfg()))
     all_acc_docs = [d for b in batch_docs for d in b]
     all_acc_emb  = np.vstack(batch_emb)
     all_acc_lbl  = np.concatenate(batch_lbl)
@@ -271,7 +272,7 @@ def scenario_head_to_head(
 
 # ── Scenario C: Bigger picture ───────────────────────────────────────────────
 
-def scenario_bigger_picture(model: CumulativeTriTopic) -> None:
+def scenario_bigger_picture(model: CumulativeGraphWeave) -> None:
     hr("SCENARIO C — Bigger picture (3-level hierarchy across all accumulated docs)")
     t0 = time.perf_counter()
     view = model.bigger_picture(n_levels=3)
@@ -298,11 +299,11 @@ def footer(t_total: float) -> None:
         import hnswlib  # noqa: F401
         hnsw_status = "ACTIVE (hnswlib installed)"
     except ImportError:
-        hnsw_status = "not active (install tritopic[fast-knn] to enable)"
+        hnsw_status = "not active (install graphweave[fast-knn] to enable)"
     print(f"  Total runtime    : {t_total/60:.1f} min")
     print(f"  Peak RAM         : {rss_mb():.0f} MB")
     print(f"  HNSW backend     : {hnsw_status}")
-    print(f"  low_memory=True  : graph-consensus path (avoids 18k×18k matrix)")
+    print("  Consensus        : default graph-consensus path (avoids 18k×18k matrix)")
     print()
     print("  Interpretation:")
     print("  · Drift fires when new categories appear → recluster discovers new topics.")

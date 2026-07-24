@@ -11,21 +11,21 @@ TF-IDF), the classic pre-neural document embedder.
 import numpy as np
 import pytest
 
-from tritopic import TriTopicConfig
-from tritopic.cumulative import (
+from graphweave import GraphWeaveConfig
+from graphweave.cumulative import (
     CumulativeConfig,
-    CumulativeTriTopic,
+    CumulativeGraphWeave,
     STRATEGY_NAMES,
     lsa_embed,
     make_streaming_corpus,
 )
-from tritopic.cumulative.evaluation import benchmark_strategies
+from graphweave.cumulative.evaluation import benchmark_strategies
 
 
 @pytest.fixture(scope="module")
 def realistic_config():
     """Full multi-view pipeline on real-ish text, kept fast (no UMAP / no iteration)."""
-    return TriTopicConfig(
+    return GraphWeaveConfig(
         use_dim_reduction=False,        # LSA already produced dense, low-dim vectors
         use_lexical_view=True,          # real text -> TF-IDF lexical graph (more realistic)
         use_iterative_refinement=False,
@@ -75,14 +75,14 @@ class TestRealisticStationary:
 
     def test_recovers_structure(self, realistic_config, stationary_corpus):
         corp = stationary_corpus
-        cum = CumulativeTriTopic(
+        cum = CumulativeGraphWeave(
             CumulativeConfig(base_config=realistic_config, strategy="global_refit",
                              recluster_trigger="drift", novelty_threshold=0.25)
         )
         for docs, emb in zip(corp.batches, corp.batch_embeddings):
             cum.add_batch(docs, embeddings=emb)
 
-        from tritopic.utils.metrics import compute_ari
+        from graphweave.utils.metrics import compute_ari
         ari_truth = compute_ari(cum.labels_, corp.all_labels)
 
         assert len(cum.labels_) == corp.n_docs
@@ -92,19 +92,19 @@ class TestRealisticStationary:
     def test_close_to_full_batch(self, realistic_config, stationary_corpus):
         corp = stationary_corpus
         full_cfg = realistic_config
-        from tritopic import TriTopic
+        from graphweave import GraphWeave
         import copy
-        full = TriTopic(config=copy.deepcopy(full_cfg))
+        full = GraphWeave(config=copy.deepcopy(full_cfg))
         full.fit(corp.all_documents, embeddings=corp.all_embeddings)
 
-        cum = CumulativeTriTopic(
+        cum = CumulativeGraphWeave(
             CumulativeConfig(base_config=full_cfg, strategy="global_refit",
                              recluster_trigger="drift", novelty_threshold=0.25)
         )
         for docs, emb in zip(corp.batches, corp.batch_embeddings):
             cum.add_batch(docs, embeddings=emb)
 
-        from tritopic.utils.metrics import compute_ari
+        from graphweave.utils.metrics import compute_ari
         # Even when most of the stream is assigned cheaply (no refit), the
         # cumulative labelling stays very close to a full-batch fit.
         assert compute_ari(cum.labels_, full.labels_) >= 0.85
@@ -116,7 +116,7 @@ class TestEmergingTopicDrift:
 
     def test_drift_detects_new_theme(self, realistic_config, emerging_corpus):
         corp = emerging_corpus
-        cum = CumulativeTriTopic(
+        cum = CumulativeGraphWeave(
             CumulativeConfig(base_config=realistic_config, strategy="global_refit",
                              recluster_trigger="drift", novelty_threshold=0.15)
         )

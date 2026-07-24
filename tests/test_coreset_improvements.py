@@ -15,17 +15,17 @@ downloads an embedding model.
 import numpy as np
 import pytest
 
-from tritopic import TriTopic, TriTopicConfig
-from tritopic.core.clustering import ConsensusLeiden
-from tritopic.core.model import TopicInfo
-from tritopic.cumulative import CumulativeConfig, CumulativeTriTopic
-from tritopic.cumulative.alignment import (
+from graphweave import GraphWeave, GraphWeaveConfig
+from graphweave.core.clustering import ConsensusLeiden
+from graphweave.core.model import TopicInfo
+from graphweave.cumulative import CumulativeConfig, CumulativeGraphWeave
+from graphweave.cumulative.alignment import (
     microcluster_coreset,
     sensitivity_weights,
     stratified_coreset,
 )
-from tritopic.cumulative.evaluation import compare_to_full_batch
-from tritopic.cumulative.strategies import ReclusterContext, _select_reduced
+from graphweave.cumulative.evaluation import compare_to_full_batch
+from graphweave.cumulative.strategies import ReclusterContext, _select_reduced
 
 
 # --------------------------------------------------------------------------- #
@@ -263,7 +263,7 @@ class TestWeightedPartition:
 # --------------------------------------------------------------------------- #
 class TestWeightedCentroids:
     def _model_with_state(self, emb, labels, weights):
-        m = TriTopic(config=TriTopicConfig(verbose=False))
+        m = GraphWeave(config=GraphWeaveConfig(verbose=False))
         m.labels_ = np.asarray(labels)
         m.original_embeddings_ = emb
         m.embeddings_ = emb
@@ -299,7 +299,7 @@ class TestWeightedCentroids:
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def light_config():
-    return TriTopicConfig(
+    return GraphWeaveConfig(
         use_dim_reduction=False,
         use_iterative_refinement=False,
         use_lexical_view=False,
@@ -351,7 +351,7 @@ def _run(strategy_selection, light_config, batches):
         min_docs_per_topic_in_coreset=8,
         recluster_trigger="manual",              # only batch1 auto-reclusters; rest are assigned-only
     )
-    cum = CumulativeTriTopic(cfg)
+    cum = CumulativeGraphWeave(cfg)
     for docs, emb in batches:
         cum.add_batch(docs, embeddings=emb)      # extends labels_ to span the accumulator
     cum.recluster()                              # one Regime-B refit with labels_ fully aligned
@@ -365,7 +365,7 @@ def test_stratified_engages_under_drift_trigger(light_config, monkeypatch):
     recluster decision, so a Regime-B coreset stratifies on full-length labels
     instead of silently falling back to recency.
     """
-    import tritopic.cumulative.strategies as S
+    import graphweave.cumulative.strategies as S
 
     rng = np.random.default_rng(0)
     centers = rng.normal(size=(3, 16))
@@ -392,7 +392,7 @@ def test_stratified_engages_under_drift_trigger(light_config, monkeypatch):
         coreset_selection="stratified", min_docs_per_topic_in_coreset=8,
         recluster_trigger="drift", novelty_threshold=0.2,
     )
-    cum = CumulativeTriTopic(cfg)
+    cum = CumulativeGraphWeave(cfg)
     for t in [0, 1, 2, 0, 1, 2]:
         d, e = gen(t, 120)
         cum.add_batch(d, embeddings=e)
@@ -408,7 +408,7 @@ def test_stratified_beats_recency_on_rare_recall(light_config):
     all_docs = [d for docs, _ in batches for d in docs]
     all_emb = np.vstack([e for _, e in batches])
 
-    full = TriTopic(config=light_config).fit(all_docs, embeddings=all_emb)
+    full = GraphWeave(config=light_config).fit(all_docs, embeddings=all_emb)
 
     # rare_frac=0.05 (~35 docs) so the 15-doc planted topic counts as rare.
     kw = dict(rare_frac=0.05, rare_sim_cutoff=0.4)
