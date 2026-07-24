@@ -1,4 +1,4 @@
-# TriTopic Visual Guide
+# GraphWeave Visual Guide
 
 Diagrams, flowcharts, and visual explanations.
 
@@ -38,31 +38,26 @@ INPUT DOCUMENTS
     │ └───────────────────────────────────────┘  │
     │                ↓                            │
     │ ┌───────────────────────────────────────┐  │
-    │ │ 2c. CO-OCCURRENCE MATRIX ⚠️ CRITICAL │  │
-    │ │ Dense: 14 GB ✗ (if low_memory=False) │  │
-    │ │ Sparse: 2 GB ✓ (if low_memory=True)  │  │
+    │ │ 2c. CONSENSUS (default: graph)        │  │
+    │ │ Sparse co-occurrence graph + one      │  │
+    │ │ Leiden pass on it. Memory: <1 GB      │  │
+    │ │ (legacy hierarchical path: see below) │  │
     │ └───────────────────────────────────────┘  │
     │                ↓                            │
     │ ┌───────────────────────────────────────┐  │
-    │ │ 2d. SCIPY LINKAGE                     │  │
-    │ │ Hierarchical clustering               │  │
-    │ │ Memory: 6-10 GB workspace             │  │
+    │ │ 2d. STABILITY SCORE                   │  │
+    │ │ Compare the 10 individual Leiden runs │  │
+    │ │ pairwise (ARI) → stability_score_     │  │
     │ └───────────────────────────────────────┘  │
     │                ↓                            │
     │ ┌───────────────────────────────────────┐  │
-    │ │ 2e. CONSENSUS + STABILITY             │  │
-    │ │ Majority voting on cluster labels     │  │
-    │ │ Compute stability_score_              │  │
-    │ └───────────────────────────────────────┘  │
-    │                ↓                            │
-    │ ┌───────────────────────────────────────┐  │
-    │ │ 2f. ITERATIVE REFINEMENT              │  │
+    │ │ 2e. ITERATIVE REFINEMENT              │  │
     │ │ Pull embeddings toward cluster centers│  │
     │ │ Memory: 3-4 GB                        │  │
     │ └───────────────────────────────────────┘  │
     │                ↓                            │
     │ ┌───────────────────────────────────────┐  │
-    │ │ 2g. CHECK CONVERGENCE                 │  │
+    │ │ 2f. CHECK CONVERGENCE                 │  │
     │ │ Compare with previous iteration (ARI) │  │
     │ │ If converged → EXIT LOOP              │  │
     │ └───────────────────────────────────────┘  │
@@ -78,9 +73,16 @@ INPUT DOCUMENTS
 OUTPUT (Labels, Topics, Embeddings)
 ```
 
+> The steps above show the **default `consensus_method="graph"`** path (2.3.0+), which never
+> materializes an N×N dense matrix and never calls `scipy.linkage`. Everything from here on
+> in this "Memory Usage Timeline" through "Memory vs Speed Trade-off" describes the **legacy
+> `consensus_method="hierarchical"`** path, kept for reproducibility/small-N use cases. On the
+> default path, peak extra memory stays under 1 GB regardless of corpus size — none of the
+> `low_memory` tuning below is needed.
+
 ---
 
-## Memory Usage Timeline
+## Memory Usage Timeline (legacy `consensus_method="hierarchical"` path)
 
 ### Without Optimization (low_memory=False)
 
@@ -126,7 +128,7 @@ Memory (GB)
 
 ---
 
-## Co-Occurrence Matrix: Visual Example
+## Co-Occurrence Matrix: Visual Example (legacy `consensus_method="hierarchical"` path)
 
 ### Step 1: Run Leiden 3 Times
 
@@ -409,21 +411,34 @@ Found: 200 topics (too many!)
 
 ## Memory vs Speed Trade-off
 
+With the default `consensus_method="graph"`, memory is already <1 GB for the consensus step
+regardless of the settings below — the trade-offs here are about speed/quality, not memory:
+
 ```
+Configuration        Speed   Quality
+────────────────────────────────────
+Default              10m     High
++ max_iter=3          6m     Good ✓
++ n_neighbors=10       5m     Medium
++ reduced_dims=30      4m     Medium
++ all above            3m     Acceptable
+
+Recommended (balanced):
+  max_iterations=3
+  n_neighbors=15
+  Result: 6 min, Good quality
+
+(The table below shows the legacy consensus_method="hierarchical" path, where
+low_memory=True is the main memory lever.)
+
 Configuration        Memory  Speed   Quality
 ─────────────────────────────────────────────
-Default              25 GB   10m     High
+Legacy default       25 GB   10m     High
 + low_memory=True    10 GB   10m     High ✓
 + max_iter=3         10 GB   6m      Good ✓
 + n_neighbors=10     10 GB   5m      Medium
 + reduced_dims=30    10 GB   4m      Medium
 + all above          10 GB   3m      Acceptable
-
-Recommended (balanced):
-  low_memory=True
-  max_iterations=3
-  n_neighbors=15
-  Result: 10 GB memory, 6 min, Good quality
 ```
 
 ---
@@ -480,18 +495,17 @@ Cause: Usually means blend_factor or parameters are wrong
 ## Decision Tree: Configuration Help
 
 ```
-Start here: "How many documents?"
+Start here: "Are you on the default consensus_method='graph'?"
 
     ↓
-    
-< 10k docs?
-    ├─ YES → Use default config (low_memory not needed)
-    └─ NO → Continue
-    
-< 50k docs?
-    ├─ YES → Set low_memory=True
-    └─ NO → Set low_memory=True (critical!)
-    
+
+YES (default) → No memory config needed, at any corpus size. Skip to speed/quality below.
+NO (opted into consensus_method="hierarchical") → Continue:
+
+    < 10k docs?
+        ├─ YES → low_memory not needed
+        └─ NO → Set low_memory=True (critical above ~30k docs)
+
 Want results in < 5 minutes?
     ├─ YES → max_iterations=2, n_neighbors=10
     └─ NO → max_iterations=5, n_neighbors=25
@@ -510,7 +524,25 @@ Have good quality data?
 
 ## Summary Diagrams
 
-### Where Memory Goes (43k docs, low_memory=False)
+### Where Memory Goes (43k docs, default consensus_method="graph")
+
+The "<1 GB" figure used elsewhere in this guide refers to the **consensus step alone**, not
+total pipeline memory. Total peak here is dominated by embeddings/UMAP/refinement, which are
+unrelated to consensus and identical on the legacy path below:
+
+```
+Memory Budget: ~10 GB peak (dominated by embeddings, not consensus)
+
+Embeddings:         10 GB ███
+UMAP:               3 GB  █
+Graph building:     2 GB  █
+Leiden 10x:         3 GB  █
+Consensus (graph):  <1 GB       ← no dense matrix, no scipy.linkage
+Refinement:         4 GB  ██
+(Some overlap in time)
+```
+
+### Legacy `consensus_method="hierarchical"` path (43k docs, low_memory=False)
 
 ```
 Memory Budget: 25 GB peak
@@ -525,7 +557,7 @@ Refinement:         4 GB  ██
 (Some overlap in time)
 ```
 
-### Where Memory Goes (43k docs, low_memory=True)
+### Legacy `consensus_method="hierarchical"` path (43k docs, low_memory=True)
 
 ```
 Memory Budget: 10 GB peak
@@ -549,7 +581,8 @@ Before running on large dataset:
 
 Memory:
   ☐ RAM available: Check with `free -h`
-  ☐ Set low_memory=True if > 30k docs
+  ☐ Confirm consensus_method="graph" (default) — no memory tuning needed
+  ☐ Only if using legacy consensus_method="hierarchical": set low_memory=True if > 30k docs
   ☐ Monitor with psutil script
 
 Data Quality:

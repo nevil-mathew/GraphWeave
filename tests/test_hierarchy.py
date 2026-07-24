@@ -1,9 +1,9 @@
-"""Tests for tritopic.core.hierarchy — TopicNode and TopicHierarchy."""
+"""Tests for graphweave.core.hierarchy — TopicNode and TopicHierarchy."""
 
 import numpy as np
 import pytest
 
-from tritopic.core.hierarchy import TopicNode, TopicHierarchy
+from graphweave.core.hierarchy import TopicNode, TopicHierarchy
 
 
 def _make_node(node_id, level=0, topic_id=0, size=10):
